@@ -12,6 +12,9 @@ python-multipart>=0.0.20
 pytest>=8.3.0
 pytest-asyncio>=0.24.0
 
+# Modo Claude Code (traz o Claude Code empacotado; ~170 MB)
+claude-agent-sdk==0.2.187
+
 # Voz (TTS/STT) - instalados e funcionando neste ambiente
 pyttsx3>=2.99
 SpeechRecognition>=3.17.0
