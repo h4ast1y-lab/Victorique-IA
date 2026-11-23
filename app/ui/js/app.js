@@ -6,25 +6,28 @@ let selectedModel = null;
 let activeAbortController = null;
 let isGenerating = false;
 let projectsCache = [];
+let profilesCache = [];
+let conversationsCache = [];
 let authPollTimer = null;
-let voiceEnabled = false;
 let sttAvailable = false;
 let ttsAvailable = false;
+let micAvailable = false;
+let currentBackend = null;
+let prefs = {};
 
 const $ = (id) => document.getElementById(id);
 const escape = (t) => (window.escapeHtml ? window.escapeHtml(t) : String(t || ''));
 const md = (t) => (window.renderMarkdown ? window.renderMarkdown(t) : escape(t));
+const icon = (name, cls = 'ic') => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
 
 // DOM Elements
 const chatInput = $('chatInput');
 const chatForm = $('chatForm');
+const chatMain = $('chatMain');
 const btnSend = $('btnSend');
 const btnStop = $('btnStop');
 const btnVoiceListen = $('btnVoiceListen');
-const btnVoiceSpeak = $('btnVoiceSpeak');
-const voiceStatus = $('voiceStatus');
 const messagesList = $('messagesList');
-const welcomeScreen = $('welcomeScreen');
 const conversationsList = $('conversationsList');
 const currentChatTitle = $('currentChatTitle');
 const authBar = $('authBar');
@@ -35,22 +38,33 @@ const btnApproveAction = $('btnApproveAction');
 const btnRejectAction = $('btnRejectAction');
 const fileInput = $('fileInput');
 
+const SUGGESTIONS = [
+  { icon: 'folder', label: 'Organizar uma pasta', prompt: 'Liste os arquivos da minha pasta Documentos e sugira uma forma de organizá-los.' },
+  { icon: 'book', label: 'Consultar documentos', action: () => openLibraryModal() },
+  { icon: 'pencil', label: 'Revisar um texto', prompt: 'Revise o texto abaixo e aponte problemas de clareza, gramática e tom:\n\n' },
+  { icon: 'sparkle', label: 'O que você sabe fazer?', prompt: 'Resuma as ferramentas que você tem, o que cada uma faz e quais exigem minha autorização.' },
+];
+
 // ----------------- Initialization -----------------
 document.addEventListener('DOMContentLoaded', async () => {
+  restoreSidebarState();
   setupEventListeners();
   setupSliders();
-  await checkHealth();
-  await loadModels();
+  setupSettingsControls();
+  renderSuggestions();
+  await loadPreferences();
   await loadBackendMode();
+  await loadProfiles();
   await loadProjects();
-  await loadConversations();
-  await loadDocuments();
-  await loadMemories();
-  await loadPersonalitySettings();
+  await Promise.all([loadConversations(), loadDocuments(), loadMemories()]);
   startNewChat();
   checkPendingAuthorizations();
+  // Engine probes can take seconds (Ollama offline): never block the UI on them.
+  checkHealth();
+  loadModels();
   await initVoice();
   authPollTimer = setInterval(checkPendingAuthorizations, 5000);
+  setInterval(checkHealth, 30000);
 });
 
 function setupEventListeners() {
@@ -73,22 +87,22 @@ function setupEventListeners() {
   });
 
   chatInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    const enterSends = prefs.enter_to_send !== false;
+    if ((enterSends && !e.shiftKey) || (!enterSends && (e.ctrlKey || e.metaKey))) {
       e.preventDefault();
       sendMessage();
     }
   });
-
-  chatInput.addEventListener('input', () => {
-    chatInput.style.height = 'auto';
-    chatInput.style.height = Math.min(chatInput.scrollHeight, 180) + 'px';
-  });
+  chatInput.addEventListener('input', () => { autoGrow(); updateSendState(); });
 
   $('btnNewChat').addEventListener('click', startNewChat);
   $('btnStop').addEventListener('click', () => abortGeneration());
+  $('btnCollapseSidebar').addEventListener('click', toggleSidebar);
+  $('btnExpandSidebar').addEventListener('click', toggleSidebar);
 
-  $('btnOpenSettings').addEventListener('click', openSettingsModal);
-  $('btnSavePersonality').addEventListener('click', savePersonalitySettings);
+  $('btnOpenSettings').addEventListener('click', () => openSettingsModal());
+  $('btnSavePersonality').addEventListener('click', saveProfileFromEditor);
   $('btnCreateBackup').addEventListener('click', createBackupNow);
 
   $('btnCreateProject').addEventListener('click', () => openProjectModal());
@@ -101,54 +115,48 @@ function setupEventListeners() {
   $('btnModalUploadDoc').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', handleFileUpload);
 
-  $('searchConversations').addEventListener('input', (e) => {
-    const q = e.target.value.toLowerCase();
-    document.querySelectorAll('.conversations-list .list-item').forEach(item => {
-      const title = (item.dataset.title || '').toLowerCase();
-      item.style.display = title.includes(q) ? 'flex' : 'none';
-    });
-  });
+  $('searchConversations').addEventListener('input', renderConversationList);
 
   $('btnExportChat').addEventListener('click', exportCurrentChat);
   $('btnDeleteChat').addEventListener('click', deleteCurrentChat);
+  currentChatTitle.addEventListener('click', startTitleEdit);
 
   $('settingModel').addEventListener('change', (e) => changeModel(e.target.value));
+
+  $('btnProfileMenu').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleProfileMenu();
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.menu-anchor')) $('profileMenu').hidden = true;
+  });
 
   document.querySelectorAll('[data-close]').forEach(btn => {
     btn.addEventListener('click', () => closeModal(btn.dataset.close));
   });
   document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
-    backdrop.addEventListener('click', (e) => {
+    backdrop.addEventListener('mousedown', (e) => {
       if (e.target === backdrop) closeModal(backdrop.id);
     });
   });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      document.querySelectorAll('.modal-backdrop').forEach(m => {
-        if (m.style.display !== 'none') closeModal(m.id);
-      });
-    }
-  });
+  document.addEventListener('keydown', handleShortcuts);
 
-  // Controles de voz
-  if (btnVoiceListen) {
-    btnVoiceListen.addEventListener('click', toggleVoiceListen);
-  }
-  if (btnVoiceSpeak) {
-    btnVoiceSpeak.addEventListener('click', toggleVoiceSpeak);
-  }
+  if (btnVoiceListen) btnVoiceListen.addEventListener('click', toggleVoiceListen);
+}
 
-  document.querySelectorAll('.quick-card').forEach(card => {
-    card.addEventListener('click', () => {
-      const kind = card.dataset.quick;
-      if (kind === 'library') { openLibraryModal(); return; }
-      if (kind === 'calc') {
-        setPrompt('Faça um cálculo matemático: qual é a raiz quadrada de 144 multiplicada por 15?');
-      } else {
-        setPrompt('Resuma as ferramentas locais disponíveis e o que cada uma pode fazer, incluindo quais exigem autorização.');
-      }
-    });
-  });
+function handleShortcuts(e) {
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (e.key === 'Escape') {
+    $('profileMenu').hidden = true;
+    document.querySelectorAll('.modal-backdrop').forEach(m => { if (!m.hidden) closeModal(m.id); });
+    return;
+  }
+  if (!ctrl) return;
+  const key = e.key.toLowerCase();
+  if (e.shiftKey && key === 'o') { e.preventDefault(); startNewChat(); }
+  else if (key === 'k') { e.preventDefault(); showSidebarTab('conversations'); $('searchConversations').focus(); }
+  else if (key === 'b') { e.preventDefault(); toggleSidebar(); }
+  else if (key === ',') { e.preventDefault(); openSettingsModal(); }
 }
 
 function setupSliders() {
@@ -165,6 +173,35 @@ function setupSliders() {
   });
 }
 
+function autoGrow() {
+  chatInput.style.height = 'auto';
+  if (!chatInput.value) return; // empty: keep the one-line CSS height
+  chatInput.style.height = Math.min(chatInput.scrollHeight, 240) + 'px';
+}
+
+function updateSendState() {
+  btnSend.disabled = !chatInput.value.trim();
+}
+
+// ----------------- Sidebar -----------------
+function toggleSidebar() {
+  const layout = $('appLayout');
+  layout.classList.toggle('sidebar-collapsed');
+  try { localStorage.setItem('sidebarCollapsed', layout.classList.contains('sidebar-collapsed') ? '1' : '0'); } catch (_) { /* storage off */ }
+}
+
+function restoreSidebarState() {
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('sidebarCollapsed') === '1'; } catch (_) { /* storage off */ }
+  if (collapsed || window.innerWidth < 820) $('appLayout').classList.add('sidebar-collapsed');
+}
+
+function showSidebarTab(name) {
+  $('appLayout').classList.remove('sidebar-collapsed');
+  const tab = document.querySelector(`.nav-tab[data-tab="${name}"]`);
+  if (tab) tab.click();
+}
+
 // ----------------- HTTP helpers -----------------
 async function api(path, options = {}) {
   const opts = { method: options.method || 'GET', headers: { ...(options.headers || {}) } };
@@ -172,7 +209,7 @@ async function api(path, options = {}) {
     opts.body = options.body;
   } else if (options.body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(options.body);
+    opts.body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
   }
   if (options.signal) opts.signal = options.signal;
 
@@ -191,135 +228,296 @@ async function api(path, options = {}) {
 
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
+function toast(message, kind = 'ok') {
+  const el = document.createElement('div');
+  el.className = `toast ${kind === 'error' ? 'error' : ''}`;
+  el.innerHTML = `${icon(kind === 'error' ? 'info' : 'check')}<span></span>`;
+  el.querySelector('span').textContent = message;
+  $('toastStack').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'error' ? 5000 : 2200);
+}
+
+async function copyText(text, button) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  if (button) {
+    const old = button.innerHTML;
+    button.innerHTML = button.classList.contains('code-copy') ? `${icon('check')}Copiado` : icon('check');
+    setTimeout(() => { button.innerHTML = old; }, 1400);
+  } else {
+    toast('Copiado');
+  }
+}
+
+// ----------------- Preferences & appearance -----------------
+async function loadPreferences() {
+  try {
+    prefs = await api('/api/preferences');
+  } catch (err) {
+    console.error('Failed to load preferences', err);
+  }
+  applyAppearance();
+  fillPreferenceControls();
+  updateUserLabel();
+}
+
+let prefSaveTimer = null;
+let pendingPrefChanges = {};
+
+function savePref(name, value, { immediate = false } = {}) {
+  prefs[name] = value;
+  pendingPrefChanges[name] = value;
+  applyAppearance();
+  if (name === 'user_name') updateUserLabel();
+  clearTimeout(prefSaveTimer);
+  prefSaveTimer = setTimeout(flushPrefs, immediate ? 0 : 600);
+}
+
+async function flushPrefs() {
+  const changes = pendingPrefChanges;
+  pendingPrefChanges = {};
+  if (!Object.keys(changes).length) return;
+  try {
+    prefs = await api('/api/preferences', { method: 'POST', body: changes });
+    toast('Preferências salvas');
+  } catch (err) {
+    toast(`Não salvei: ${err.message}`, 'error');
+    await loadPreferences();
+  }
+}
+
+function resolvedTheme() {
+  if (prefs.theme === 'system') {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  return prefs.theme || 'dark';
+}
+
+function applyAppearance() {
+  const root = document.documentElement;
+  root.dataset.theme = resolvedTheme();
+  root.dataset.accent = prefs.accent || 'terracota';
+  root.dataset.fontSize = prefs.font_size || 'medium';
+  root.dataset.chatWidth = prefs.chat_width || 'normal';
+  root.dataset.responseFont = prefs.response_font || 'sans';
+  messagesList.classList.toggle('hide-reasoning', prefs.show_reasoning === false);
+  messagesList.classList.toggle('hide-tools', prefs.show_tool_events === false);
+  $('suggestions').classList.toggle('on', prefs.show_suggestions !== false);
+  chatInput.placeholder = prefs.enter_to_send === false
+    ? 'Escreva sua mensagem (Ctrl+Enter envia)'
+    : `Pergunte qualquer coisa a ${activeProfileName()}`;
+}
+
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (prefs.theme === 'system') applyAppearance();
+  });
+}
+
+function fillPreferenceControls() {
+  document.querySelectorAll('[data-pref]').forEach(el => {
+    const value = prefs[el.dataset.pref];
+    if (value === undefined) return;
+    if (el.type === 'checkbox') el.checked = !!value;
+    else el.value = value;
+  });
+  document.querySelectorAll('[data-pref-group]').forEach(group => {
+    const value = prefs[group.dataset.prefGroup];
+    group.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.value === value));
+  });
+  $('valTemperature').textContent = Number(prefs.temperature ?? 0.7).toFixed(2);
+  $('aboutCount').textContent = ($('prefUserAbout').value || '').length;
+}
+
+function setupSettingsControls() {
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => showSettingsSection(tab.dataset.section));
+  });
+
+  document.querySelectorAll('[data-pref]').forEach(el => {
+    const name = el.dataset.pref;
+    if (el.type === 'checkbox') {
+      el.addEventListener('change', () => savePref(name, el.checked, { immediate: true }));
+    } else if (el.type === 'range') {
+      el.addEventListener('input', () => { $('valTemperature').textContent = Number(el.value).toFixed(2); });
+      el.addEventListener('change', () => savePref(name, Number(el.value), { immediate: true }));
+    } else if (el.type === 'number') {
+      el.addEventListener('change', () => {
+        const n = parseInt(el.value, 10);
+        const min = Number(el.min), max = Number(el.max);
+        if (Number.isNaN(n) || n < min || n > max) {
+          toast(`Use um valor entre ${min} e ${max}.`, 'error');
+          el.value = prefs[name];
+          return;
+        }
+        savePref(name, n, { immediate: true });
+      });
+    } else if (el.tagName === 'SELECT') {
+      el.addEventListener('change', () => savePref(name, el.value, { immediate: true }));
+    } else {
+      el.addEventListener('input', () => {
+        if (name === 'user_about') $('aboutCount').textContent = el.value.length;
+        savePref(name, el.value);
+      });
+    }
+  });
+
+  document.querySelectorAll('[data-pref-group]').forEach(group => {
+    group.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+        savePref(group.dataset.prefGroup, btn.dataset.value, { immediate: true });
+      });
+    });
+  });
+
+  $('emojiLevel').querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => setEditorEmoji(Number(btn.dataset.value)));
+  });
+  $('btnDuplicateProfile').addEventListener('click', duplicateProfile);
+  $('btnResetProfile').addEventListener('click', resetEditorProfile);
+  $('btnMakeDefaultProfile').addEventListener('click', makeEditorProfileDefault);
+  $('btnDeleteProfile').addEventListener('click', deleteEditorProfile);
+}
+
+function showSettingsSection(name) {
+  document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.dataset.section === name));
+  document.querySelectorAll('.settings-section').forEach(s => s.classList.toggle('active', s.dataset.section === name));
+}
+
+function updateUserLabel() {
+  const name = (prefs.user_name || '').trim();
+  $('userNameLabel').textContent = name || 'Você';
+  $('userAvatar').textContent = name ? name.charAt(0).toUpperCase() : '?';
+  updateGreeting();
+}
+
+function updateGreeting() {
+  const h = new Date().getHours();
+  const part = h < 5 ? 'Boa noite' : h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+  const name = (prefs.user_name || '').trim();
+  $('welcomeGreeting').textContent = name ? `${part}, ${name}` : part;
+  const profile = activeProfile();
+  $('welcomeSub').textContent = profile && profile.id === 'victorique'
+    ? 'Traga um mistério. De preferência, um que não seja entediante.'
+    : 'Como posso ajudar hoje?';
+}
+
+function renderSuggestions() {
+  const box = $('suggestions');
+  box.innerHTML = '';
+  SUGGESTIONS.forEach(s => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'suggestion';
+    b.innerHTML = `${icon(s.icon)}<span></span>`;
+    b.querySelector('span').textContent = s.label;
+    b.addEventListener('click', () => (s.action ? s.action() : setPrompt(s.prompt)));
+    box.appendChild(b);
+  });
+}
+
 // ----------------- Health & Models -----------------
 async function checkHealth() {
+  const pill = $('statusPill');
+  const dot = $('statusDot');
   try {
     const data = await api('/api/health');
-    const pill = $('statusPill');
-    if (data.ollama_online) {
-      const suffix = data.default_model_installed === false ? ' — modelo ausente!' : '';
-      pill.textContent = `● Ollama Conectado (${data.default_model})${suffix}`;
-      pill.className = data.default_model_installed === false ? 'status-indicator text-danger' : 'status-indicator online';
+    const backend = currentBackend || data.active_backend;
+    let ok = data.status === 'healthy';
+    let label;
+    if (backend === 'claude-code') {
+      label = ok ? 'Claude Code pronto' : 'Claude Agent SDK ausente';
+    } else if (backend === 'ollama') {
+      ok = !!data.ollama_online && data.default_model_installed !== false;
+      label = !data.ollama_online ? 'Ollama desconectado'
+        : data.default_model_installed === false ? `Modelo ${data.default_model} ausente`
+        : `Ollama · ${data.default_model}`;
     } else {
-      pill.textContent = '○ Ollama Desconectado';
-      pill.className = 'status-indicator text-danger';
+      label = ok ? 'llama.cpp pronto' : 'llama.cpp carregando ou offline';
     }
+    pill.textContent = label;
+    pill.className = `status-indicator ${ok ? 'online' : 'offline'}`;
+    dot.className = `status-dot ${ok ? 'online' : 'offline'}`;
+    dot.parentElement.title = label;
 
-    const runtime = $('runtimeInfo');
-    if (runtime) {
-      const ocr = data.ocr || {};
-      const ocrText = ocr.available
-        ? `OCR ativo (${(ocr.languages || []).join(', ') || 'eng'})`
-        : 'OCR indisponível';
-      runtime.textContent =
-        `Ferramentas: ${data.tools_count || 0}` +
-        `${data.tool_calling_enabled ? ' · tool calling ativo' : ' · tool calling desativado'}` +
-        ` · ${ocrText}`;
-    }
+    const ocr = data.ocr || {};
+    $('runtimeInfo').innerHTML = [
+      `<strong>${escape(data.app_name || 'Victorique')}</strong>`,
+      `Modo ativo: ${escape(backendLabel(backend))} — ${escape(label)}`,
+      `Ferramentas: ${data.tools_count || 0}${data.tool_calling_enabled ? ' (tool calling ativo)' : ' (tool calling desativado)'}`,
+      ocr.available ? `OCR ativo (${escape((ocr.languages || []).join(', ') || 'eng')})` : 'OCR indisponível',
+    ].join('<br>');
   } catch (err) {
     console.error('Healthcheck failed', err);
-    $('statusPill').textContent = '○ Backend indisponível';
-    $('statusPill').className = 'status-indicator text-danger';
+    pill.textContent = 'Servidor indisponível';
+    pill.className = 'status-indicator offline';
+    dot.className = 'status-dot offline';
   }
+}
+
+function backendLabel(value) {
+  return { 'claude-code': 'Claude Code', ollama: 'Ollama', 'llama-cpp': 'llama.cpp', 'llama-cpp-server': 'llama.cpp' }[value] || value || '—';
 }
 
 async function initVoice() {
   try {
-    const [tts, stt] = await Promise.all([
-      api('/api/tts/status'),
-      api('/api/stt/status'),
-    ]);
+    const [tts, stt] = await Promise.all([api('/api/tts/status'), api('/api/stt/status')]);
     ttsAvailable = tts.available === true;
     sttAvailable = stt.available === true;
-    voiceEnabled = ttsAvailable || sttAvailable;
-
-    const ttsBtn = $('btnVoiceSpeak');
-    const sttBtn = $('btnVoiceListen');
-    const vs = $('voiceStatus');
-
-    if (ttsBtn) {
-      ttsBtn.disabled = !ttsAvailable;
-      ttsBtn.title = ttsAvailable ? 'Falar última resposta' : 'TTS indisponível';
-    }
-    if (sttBtn) {
-      sttBtn.disabled = !sttAvailable || !stt.microphone_available;
-      sttBtn.title = sttAvailable && stt.microphone_available
-        ? 'Ouvir microfone'
-        : 'STT/microfone indisponível';
-    }
-    if (vs) {
-      vs.textContent = `Voz: TTS ${ttsAvailable ? '●' : '○'} | STT ${sttAvailable ? '●' : '○'}`;
-      vs.className = voiceEnabled ? 'voice-status on' : 'voice-status off';
-    }
+    micAvailable = !!stt.microphone_available;
+    btnVoiceListen.hidden = !(sttAvailable && micAvailable);
+    $('voiceStatus').innerHTML =
+      `Leitura em voz alta: <strong>${ttsAvailable ? 'disponível' : 'indisponível'}</strong><br>` +
+      `Ditado pelo microfone: <strong>${sttAvailable && micAvailable ? 'disponível' : 'indisponível'}</strong>` +
+      (sttAvailable && !micAvailable ? ' (microfone não encontrado — instale o PyAudio)' : '');
+    document.querySelectorAll('.btn-speak').forEach(b => { b.hidden = !ttsAvailable; });
   } catch (err) {
     console.error('Voice init failed', err);
-  }
-}
-
-function updateVoiceStatus(text, kind = 'info') {
-  const vs = $('voiceStatus');
-  if (vs) {
-    vs.textContent = text;
-    vs.className = `voice-status ${kind}`;
+    btnVoiceListen.hidden = true;
   }
 }
 
 async function toggleVoiceListen() {
-  if (!sttAvailable) {
-    updateVoiceStatus('STT não disponível.', 'error');
-    return;
-  }
+  if (!sttAvailable) { toast('Ditado indisponível.', 'error'); return; }
+  btnVoiceListen.classList.add('listening');
+  btnVoiceListen.title = 'Ouvindo… fale agora';
   try {
-    updateVoiceStatus('Ouvindo... fale agora.', 'listening');
     const data = await api('/api/stt/listen', {
       method: 'POST',
-      body: JSON.stringify({ timeout: 5, phrase_time_limit: 15 }),
+      body: { timeout: 5, phrase_time_limit: 15 },
     });
     if (data.status === 'ok' && data.text) {
-      updateVoiceStatus('Reconhecido: ' + data.text.slice(0, 60) + '…', 'ok');
-      chatInput.value = data.text;
-      chatInput.style.height = 'auto';
-      chatInput.style.height = Math.min(chatInput.scrollHeight, 180) + 'px';
+      chatInput.value = (chatInput.value ? chatInput.value + ' ' : '') + data.text;
+      autoGrow();
+      updateSendState();
       chatInput.focus();
     } else {
-      updateVoiceStatus('Nenhuma fala detectada.', 'warn');
+      toast('Nenhuma fala detectada.', 'error');
     }
   } catch (err) {
-    console.error('STT error', err);
-    updateVoiceStatus('Erro no STT.', 'error');
+    toast(`Erro no ditado: ${err.message}`, 'error');
   } finally {
-    if (voiceEnabled) updateVoiceStatus('Voz: ativa', 'info');
+    btnVoiceListen.classList.remove('listening');
+    btnVoiceListen.title = 'Ditar pelo microfone';
   }
 }
 
-async function toggleVoiceSpeak() {
-  if (!ttsAvailable) {
-    updateVoiceStatus('TTS não disponível.', 'error');
-    return;
-  }
-  // Fala a última mensagem do assistente na conversa atual.
-  const lastBubble = messagesList.querySelector('.message-bubble.bot:last-child');
-  if (!lastBubble) {
-    updateVoiceStatus('Nenhuma resposta para falar.', 'warn');
-    return;
-  }
-  const text = lastBubble.textContent || '';
+async function speakText(text) {
+  if (!ttsAvailable) { toast('Leitura em voz alta indisponível.', 'error'); return; }
   try {
-    updateVoiceStatus('Falando…', 'speaking');
-    const data = await api('/api/tts/speak', {
-      method: 'POST',
-      body: JSON.stringify({ text, async_: true }),
-    });
-    if (data.status === 'speaking_async') {
-      updateVoiceStatus('Falando resposta.', 'ok');
-    } else {
-      updateVoiceStatus('TTS indisponível.', 'error');
-    }
+    const data = await api('/api/tts/speak', { method: 'POST', body: { text, async_: true } });
+    if (data.status !== 'speaking_async') toast('Leitura em voz alta indisponível.', 'error');
   } catch (err) {
-    console.error('TTS error', err);
-    updateVoiceStatus('Erro no TTS.', 'error');
-  } finally {
-    if (voiceEnabled) updateVoiceStatus('Voz: ativa', 'info');
+    toast(`Erro na leitura: ${err.message}`, 'error');
   }
 }
 
@@ -355,15 +553,20 @@ async function changeModel(name) {
     await api('/api/settings', { method: 'POST', body: { default_model: name } });
     selectedModel = name;
     updateModelTag();
+    toast('Modelo alterado');
     await checkHealth();
   } catch (err) {
-    alert(`Não foi possível salvar o modelo: ${err.message}`);
+    toast(`Não foi possível salvar o modelo: ${err.message}`, 'error');
   }
 }
 
-// ----------------- Mode (local / Claude Code) -----------------
-let currentBackend = null;
+function updateModelTag() {
+  $('modelHint').textContent = selectedModel
+    ? `Em uso: ${selectedModel}. Modelos do Ollama rodam no seu computador; nada sai dele.`
+    : 'Nenhum modelo do Ollama encontrado.';
+}
 
+// ----------------- Mode (local / Claude Code) -----------------
 async function loadBackendMode() {
   try {
     const cfg = await api('/api/settings');
@@ -379,9 +582,10 @@ async function changeBackend(value) {
     await api('/api/settings', { method: 'POST', body: { default_backend: value } });
     currentBackend = value;
     updateModeUi();
+    toast(`Modo: ${backendLabel(value)}`);
     await checkHealth();
   } catch (err) {
-    alert(`Não foi possível trocar o modo: ${err.message}`);
+    toast(`Não foi possível trocar o modo: ${err.message}`, 'error');
     updateModeUi();
   }
 }
@@ -391,50 +595,375 @@ function updateModeUi() {
   // llama-cpp-server is the same local engine as llama-cpp in the selector.
   $('modeSelect').value = currentBackend === 'llama-cpp-server' ? 'llama-cpp' : (currentBackend || 'llama-cpp');
   $('claudeBadge').hidden = !isClaude;
-  $('activeModelTag').hidden = isClaude;
 }
 
-function updateModelTag() {
-  const tag = $('activeModelTag');
-  if (!selectedModel) { tag.textContent = '—'; return; }
-  tag.textContent = selectedModel;
-  $('modelHint').textContent = selectedModel.includes('coder')
-    ? 'Modelo de código. Na GTX 1660 Super (6 GB) parte das camadas roda em CPU; respostas longas podem demorar.'
-    : 'Modelos locais via Ollama. Nenhum dado sai do computador.';
+// ----------------- Profiles -----------------
+function activeProfile() {
+  return profilesCache.find(p => p.id === currentPersonalityId)
+    || profilesCache.find(p => p.is_default)
+    || profilesCache[0] || null;
+}
+
+function activeProfileName() {
+  const p = activeProfile();
+  return p ? p.name : 'Victorique';
+}
+
+function avatarText(p) {
+  if (!p) return 'V';
+  return (p.avatar || '').trim() || (p.name || '?').charAt(0).toUpperCase();
+}
+
+async function loadProfiles() {
+  try {
+    profilesCache = await api('/api/personalities');
+    if (!currentPersonalityId || !profilesCache.some(p => p.id === currentPersonalityId)) {
+      const def = profilesCache.find(p => p.is_default) || profilesCache[0];
+      currentPersonalityId = def ? def.id : null;
+    }
+    updateProfileUi();
+  } catch (err) {
+    console.error('Failed to load profiles', err);
+  }
+}
+
+function updateProfileUi() {
+  const p = activeProfile();
+  const av = avatarText(p);
+  $('profilePillAvatar').textContent = av;
+  $('profilePillName').textContent = p ? p.name : '—';
+  $('welcomeAvatar').textContent = av;
+  $('brandAvatar').textContent = av;
+  $('brandName').textContent = p ? p.name : 'Victorique';
+  $('composerNote').textContent = `${p ? p.name : 'A assistente'} pode errar. Confira informações importantes.`;
+  document.title = p ? p.name : 'Victorique';
+  updateGreeting();
+  applyAppearance();
+}
+
+function toggleProfileMenu() {
+  const menu = $('profileMenu');
+  if (!menu.hidden) { menu.hidden = true; return; }
+  menu.innerHTML = '<div class="popover-title">Perfil da assistente</div>';
+  profilesCache.forEach(p => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'popover-item';
+    item.innerHTML = `
+      <span class="pill-avatar"></span>
+      <span class="popover-item-text"><strong></strong><small></small></span>
+      ${p.id === currentPersonalityId ? icon('check', 'ic check') : ''}`;
+    item.querySelector('.pill-avatar').textContent = avatarText(p);
+    item.querySelector('strong').textContent = p.name;
+    item.querySelector('small').textContent = p.description || (p.is_default ? 'Perfil padrão' : p.tone || '');
+    item.addEventListener('click', () => {
+      currentPersonalityId = p.id;
+      menu.hidden = true;
+      updateProfileUi();
+      toast(currentConversationId ? `${p.name} responde a partir da próxima mensagem` : `Perfil: ${p.name}`);
+    });
+    menu.appendChild(item);
+  });
+  const sep = document.createElement('div');
+  sep.className = 'popover-sep';
+  menu.appendChild(sep);
+  const manage = document.createElement('button');
+  manage.type = 'button';
+  manage.className = 'popover-item';
+  manage.innerHTML = `${icon('sliders')}<span class="popover-item-text"><strong>Gerenciar perfis</strong></span>`;
+  manage.addEventListener('click', () => { menu.hidden = true; openSettingsModal('profiles'); });
+  menu.appendChild(manage);
+  menu.hidden = false;
+}
+
+// Profile editor (Settings → Perfis)
+let editorProfileId = null;
+let editorEmoji = 2;
+
+function renderProfileList() {
+  const list = $('profileList');
+  list.innerHTML = '';
+  profilesCache.forEach(p => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `profile-card ${p.id === editorProfileId ? 'active' : ''}`;
+    card.innerHTML = `
+      <span class="profile-card-avatar"></span>
+      <span class="profile-card-text"><strong></strong><small></small></span>
+      ${p.is_default ? '<span class="badge">Padrão</span>' : ''}`;
+    card.querySelector('.profile-card-avatar').textContent = avatarText(p);
+    card.querySelector('strong').textContent = p.name;
+    card.querySelector('small').textContent = p.tone || '';
+    card.addEventListener('click', () => loadProfileIntoEditor(p));
+    list.appendChild(card);
+  });
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'profile-card profile-new';
+  add.innerHTML = `${icon('plus')}<span>Novo perfil</span>`;
+  add.addEventListener('click', () => loadProfileIntoEditor(null));
+  list.appendChild(add);
+}
+
+function loadProfileIntoEditor(p) {
+  editorProfileId = p ? p.id : null;
+  $('profileId').value = editorProfileId || '';
+  $('profileAvatar').value = p ? (p.avatar || '') : '';
+  $('settingName').value = p ? p.name : '';
+  $('profileDescription').value = p ? (p.description || '') : '';
+  $('settingInstructions').value = p ? p.system_instructions : '';
+  $('settingTone').value = p ? (p.tone || '') : '';
+  [['sliderFormality', 'valFormality', p ? p.formality : 3],
+   ['sliderObjectivity', 'valObjectivity', p ? p.objectivity : 4],
+   ['sliderDetail', 'valDetail', p ? p.detail_level : 3]].forEach(([s, v, val]) => {
+    $(s).value = val || 3;
+    $(v).textContent = val || 3;
+  });
+  setEditorEmoji(p ? (p.emoji_level || 2) : 2);
+  $('btnDeleteProfile').disabled = !p || !!p.is_default || p.id === 'default';
+  $('btnMakeDefaultProfile').disabled = !p || !!p.is_default;
+  $('btnDuplicateProfile').disabled = !p;
+  $('btnResetProfile').hidden = !p || p.id !== 'victorique';
+  renderProfileList();
+  if (!p) $('settingName').focus();
+}
+
+function setEditorEmoji(level) {
+  editorEmoji = level;
+  $('emojiLevel').querySelectorAll('button').forEach(b => b.classList.toggle('active', Number(b.dataset.value) === level));
+}
+
+function editorPayload() {
+  const existing = profilesCache.find(p => p.id === editorProfileId);
+  return {
+    id: editorProfileId || undefined,
+    name: $('settingName').value.trim(),
+    avatar: $('profileAvatar').value.trim(),
+    description: $('profileDescription').value.trim(),
+    system_instructions: $('settingInstructions').value.trim(),
+    tone: $('settingTone').value.trim() || 'prestativo',
+    formality: parseInt($('sliderFormality').value, 10),
+    objectivity: parseInt($('sliderObjectivity').value, 10),
+    detail_level: parseInt($('sliderDetail').value, 10),
+    emoji_level: editorEmoji,
+    is_default: existing ? !!existing.is_default : false,
+  };
+}
+
+async function saveProfileFromEditor() {
+  const payload = editorPayload();
+  if (!payload.name || !payload.system_instructions) {
+    toast('Nome e instruções não podem ficar vazios.', 'error');
+    return;
+  }
+  try {
+    const saved = await api('/api/personalities', { method: 'POST', body: payload });
+    await loadProfiles();
+    loadProfileIntoEditor(profilesCache.find(p => p.id === saved.id) || saved);
+    toast('Perfil salvo');
+  } catch (err) {
+    toast(`Falha ao salvar perfil: ${err.message}`, 'error');
+  }
+}
+
+function duplicateProfile() {
+  const payload = editorPayload();
+  editorProfileId = null;
+  $('profileId').value = '';
+  $('settingName').value = `${payload.name} (cópia)`;
+  $('btnDeleteProfile').disabled = true;
+  $('btnMakeDefaultProfile').disabled = true;
+  $('btnDuplicateProfile').disabled = true;
+  renderProfileList();
+  toast('Cópia criada no editor. Salve para manter.');
+}
+
+async function resetEditorProfile() {
+  if (!editorProfileId) return;
+  try {
+    const original = await api(`/api/personalities/${encodeURIComponent(editorProfileId)}/factory`);
+    const current = profilesCache.find(p => p.id === editorProfileId) || {};
+    loadProfileIntoEditor({ ...original, is_default: current.is_default });
+    toast('Textos originais carregados. Clique em Salvar perfil para manter.');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function makeEditorProfileDefault() {
+  if (!editorProfileId) { toast('Salve o perfil primeiro.', 'error'); return; }
+  try {
+    await api(`/api/personalities/${encodeURIComponent(editorProfileId)}/default`, { method: 'POST' });
+    if (!currentConversationId) currentPersonalityId = editorProfileId;
+    await loadProfiles();
+    loadProfileIntoEditor(profilesCache.find(p => p.id === editorProfileId));
+    toast('Perfil padrão alterado');
+  } catch (err) {
+    toast(`Falha: ${err.message}`, 'error');
+  }
+}
+
+async function deleteEditorProfile() {
+  const p = profilesCache.find(x => x.id === editorProfileId);
+  if (!p) return;
+  if (!confirm(`Excluir o perfil "${p.name}"? Esta ação não pode ser desfeita.`)) return;
+  try {
+    await api(`/api/personalities/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+    if (currentPersonalityId === p.id) currentPersonalityId = null;
+    await loadProfiles();
+    loadProfileIntoEditor(activeProfile());
+    toast('Perfil excluído');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
 }
 
 // ----------------- Conversations -----------------
 async function loadConversations() {
   try {
-    const all = await api('/api/conversations');
-    // Projects are isolated: the sidebar shows only the selected scope.
-    const list = all.filter(c => (c.project_id || null) === (currentProjectId || null));
-    conversationsList.innerHTML = '';
-    list.forEach(c => {
-      const item = document.createElement('div');
-      item.className = `list-item ${c.id === currentConversationId ? 'active' : ''}`;
-      item.dataset.id = c.id;
-      item.dataset.title = c.title || '';
-      item.innerHTML = `
-        <span class="list-item-title">${escape(c.title || 'Sem título')}</span>
-        <button class="btn-ghost btn-xs text-danger" title="Excluir conversa">✕</button>
-      `;
-      item.addEventListener('click', () => switchConversation(c.id));
-      item.querySelector('button').addEventListener('click', (e) => deleteConversationById(c.id, e));
-      conversationsList.appendChild(item);
-    });
+    conversationsCache = await api('/api/conversations');
+    renderConversationList();
   } catch (err) {
     console.error('Failed to load conversations', err);
   }
 }
 
+function parseDbDate(value) {
+  if (!value) return null;
+  const iso = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T') + 'Z';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function dateGroup(d) {
+  if (!d) return 'Mais antigas';
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const days = (startOfToday - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000;
+  if (days <= 0) return 'Hoje';
+  if (days === 1) return 'Ontem';
+  if (days < 7) return 'Últimos 7 dias';
+  if (days < 30) return 'Últimos 30 dias';
+  return 'Mais antigas';
+}
+
+function renderConversationList() {
+  const q = ($('searchConversations').value || '').toLowerCase().trim();
+  // Projects are isolated: the sidebar shows only the selected scope.
+  const list = conversationsCache
+    .filter(c => (c.project_id || null) === (currentProjectId || null))
+    .filter(c => !q || (c.title || '').toLowerCase().includes(q));
+  conversationsList.innerHTML = '';
+  if (!list.length) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-hint';
+    empty.textContent = q ? 'Nenhuma conversa encontrada.' : 'Suas conversas aparecem aqui.';
+    conversationsList.appendChild(empty);
+    return;
+  }
+  let lastGroup = null;
+  list.forEach(c => {
+    const group = dateGroup(parseDbDate(c.updated_at || c.created_at));
+    if (group !== lastGroup) {
+      const label = document.createElement('div');
+      label.className = 'group-label';
+      label.textContent = group;
+      conversationsList.appendChild(label);
+      lastGroup = group;
+    }
+    const item = document.createElement('div');
+    item.className = `list-item ${c.id === currentConversationId ? 'active' : ''}`;
+    item.dataset.id = c.id;
+    item.dataset.title = c.title || '';
+    item.innerHTML = `
+      <span class="list-item-title"></span>
+      <span class="item-actions">
+        <button class="icon-btn" title="Renomear">${icon('pencil')}</button>
+        <button class="icon-btn danger" title="Excluir conversa">${icon('trash')}</button>
+      </span>`;
+    item.querySelector('.list-item-title').textContent = c.title || 'Sem título';
+    item.addEventListener('click', () => switchConversation(c.id));
+    const [renameBtn, delBtn] = item.querySelectorAll('button');
+    renameBtn.addEventListener('click', (e) => { e.stopPropagation(); startInlineRename(item, c); });
+    delBtn.addEventListener('click', (e) => deleteConversationById(c.id, e));
+    conversationsList.appendChild(item);
+  });
+}
+
+function startInlineRename(item, conv) {
+  const titleEl = item.querySelector('.list-item-title');
+  const input = document.createElement('input');
+  input.className = 'rename-input';
+  input.value = conv.title || '';
+  input.maxLength = 120;
+  titleEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const title = input.value.trim();
+    if (save && title && title !== conv.title) await renameConversation(conv.id, title);
+    else renderConversationList();
+  };
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') { e.stopPropagation(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+async function renameConversation(id, title) {
+  try {
+    await api(`/api/conversations/${id}`, { method: 'PUT', body: { title } });
+    if (id === currentConversationId) currentChatTitle.textContent = title;
+    await loadConversations();
+  } catch (err) {
+    toast(`Falha ao renomear: ${err.message}`, 'error');
+    renderConversationList();
+  }
+}
+
+function startTitleEdit() {
+  if (!currentConversationId || currentChatTitle.isContentEditable) return;
+  const original = currentChatTitle.textContent;
+  currentChatTitle.contentEditable = 'true';
+  currentChatTitle.focus();
+  document.getSelection().selectAllChildren(currentChatTitle);
+  const finish = async (save) => {
+    currentChatTitle.contentEditable = 'false';
+    currentChatTitle.removeEventListener('keydown', onKey);
+    currentChatTitle.removeEventListener('blur', onBlur);
+    const title = currentChatTitle.textContent.trim().slice(0, 120);
+    if (save && title && title !== original) await renameConversation(currentConversationId, title);
+    else currentChatTitle.textContent = original;
+  };
+  const onKey = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); currentChatTitle.blur(); }
+    if (e.key === 'Escape') { e.stopPropagation(); currentChatTitle.textContent = original; currentChatTitle.blur(); }
+  };
+  const onBlur = () => finish(true);
+  currentChatTitle.addEventListener('keydown', onKey);
+  currentChatTitle.addEventListener('blur', onBlur);
+}
+
+function setEmptyState(empty) {
+  chatMain.classList.toggle('is-empty', empty);
+}
+
 function startNewChat() {
   if (isGenerating) abortGeneration(true);
   currentConversationId = null;
-  currentChatTitle.textContent = 'Nova Conversa';
+  currentChatTitle.textContent = 'Nova conversa';
   messagesList.innerHTML = '';
-  welcomeScreen.style.display = 'block';
+  setEmptyState(true);
+  const def = profilesCache.find(p => p.is_default);
+  if (def) currentPersonalityId = def.id;
+  updateProfileUi();
   document.querySelectorAll('.conversations-list .list-item').forEach(i => i.classList.remove('active'));
+  updateSendState();
   chatInput.focus();
 }
 
@@ -453,20 +982,24 @@ async function switchConversation(convId) {
     const conv = data.conversation;
     currentChatTitle.textContent = conv.title;
     currentProjectId = conv.project_id || null;
-    currentPersonalityId = conv.personality_id || currentPersonalityId;
+    if (conv.personality_id && profilesCache.some(p => p.id === conv.personality_id)) {
+      currentPersonalityId = conv.personality_id;
+    }
+    updateProfileUi();
     updateProjectTag();
     messagesList.innerHTML = '';
-    welcomeScreen.style.display = 'none';
+    setEmptyState(false);
 
     data.messages.forEach(m => {
-      renderMessage(m.role, m.content, m.sources);
+      if (m.role === 'user' || m.role === 'assistant') renderMessage(m.role, m.content, m.sources);
     });
+    scrollToBottom();
     await loadConversations();
     await loadDocuments();
     await loadMemories();
   } catch (err) {
     console.error('Failed to switch conversation', err);
-    alert(`Falha ao abrir conversa: ${err.message}`);
+    toast(`Falha ao abrir conversa: ${err.message}`, 'error');
   }
 }
 
@@ -488,28 +1021,37 @@ async function sendMessage() {
       currentConversationId = conv.id;
       currentChatTitle.textContent = conv.title;
     } catch (err) {
-      alert(`Não foi possível criar a conversa: ${err.message}`);
+      toast(`Não foi possível criar a conversa: ${err.message}`, 'error');
       return;
     }
   }
 
   chatInput.value = '';
-  chatInput.style.height = 'auto';
-  welcomeScreen.style.display = 'none';
+  autoGrow();
+  setEmptyState(false);
 
   renderMessage('user', text);
   const assistantMsgEl = renderMessage('assistant', '');
+  assistantMsgEl.classList.add('streaming');
+  const body = assistantMsgEl.querySelector('.msg-body');
   const bubble = assistantMsgEl.querySelector('.message-bubble');
+  bubble.innerHTML = `<span class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span>${escape(activeProfileName())} está pensando…</span>`;
+
+  const toolDetails = document.createElement('details');
+  toolDetails.className = 'tool-events';
+  toolDetails.hidden = true;
+  toolDetails.innerHTML = `<summary>${icon('sliders', 'ic ic-sm')}<span class="tool-summary">Usando ferramentas</span></summary>`;
   const toolBox = document.createElement('div');
-  toolBox.className = 'tool-events';
-  assistantMsgEl.appendChild(toolBox);
+  toolBox.className = 'tool-list';
+  toolDetails.appendChild(toolBox);
+  body.insertBefore(toolDetails, bubble);
   const citationsContainer = document.createElement('div');
   citationsContainer.className = 'citations-box';
-  assistantMsgEl.appendChild(citationsContainer);
+  body.insertBefore(citationsContainer, body.querySelector('.msg-actions'));
 
   isGenerating = true;
-  btnSend.style.display = 'none';
-  btnStop.style.display = 'inline-flex';
+  btnSend.hidden = true;
+  btnStop.hidden = false;
   activeAbortController = new AbortController();
   let accumulated = '';
   let reasoningBody = null;
@@ -527,7 +1069,7 @@ async function sendMessage() {
         backend: currentBackend || undefined,
         project_id: currentProjectId,
         personality_id: currentPersonalityId,
-        enable_rag: true,
+        enable_rag: prefs.enable_rag !== false,
       })
     });
 
@@ -572,7 +1114,7 @@ async function sendMessage() {
           const args = JSON.stringify(data.arguments || {});
           appendToolEvent(
             toolBox,
-            `🔧 Executando ${data.tool} ${args.length > 160 ? args.slice(0, 160) + '…' : args}`,
+            `▸ ${data.tool} ${args.length > 160 ? args.slice(0, 160) + '…' : args}`,
             'tool-event-running'
           );
         } else if (data.type === 'tool_result') {
@@ -589,13 +1131,13 @@ async function sendMessage() {
           const ok = data.status === 'success';
           appendToolEvent(
             toolBox,
-            `${ok ? '✅' : '⚠️'} ${data.tool} (${data.status})${detail ? ' — ' + detail : ''}`,
+            `${ok ? '✓' : '!'} ${data.tool} (${data.status})${detail ? ' — ' + detail : ''}`,
             ok ? 'tool-event-ok' : 'tool-event-error'
           );
         } else if (data.type === 'authorization_required') {
           appendToolEvent(
             toolBox,
-            `🔐 Autorização necessária: ${data.tool_name || data.tool || 'ação'} — ${data.resource || ''}`,
+            `Autorização necessária: ${data.tool_name || data.tool || 'ação'} — ${data.resource || ''}`,
             'tool-event-auth'
           );
           checkPendingAuthorizations(true);
@@ -605,26 +1147,26 @@ async function sendMessage() {
             const details = document.createElement('details');
             details.className = 'reasoning-box';
             const summary = document.createElement('summary');
-            summary.textContent = 'Raciocínio';
+            summary.innerHTML = `${icon('sparkle', 'ic ic-sm')}Raciocínio`;
             reasoningBody = document.createElement('div');
             reasoningBody.className = 'reasoning-body';
             details.appendChild(summary);
             details.appendChild(reasoningBody);
-            assistantMsgEl.insertBefore(details, bubble);
+            body.insertBefore(details, toolDetails);
           }
           reasoningBody.textContent += data.content || '';
-          scrollToBottom();
+          scrollToBottom(true);
         } else if (data.type === 'notice') {
-          appendToolEvent(toolBox, `ℹ️ ${data.message}`, 'tool-event-notice');
+          appendToolEvent(toolBox, `${data.message}`, 'tool-event-notice');
         } else if (data.type === 'token') {
           accumulated += data.content || '';
           bubble.innerHTML = md(accumulated);
-          scrollToBottom();
+          scrollToBottom(true);
         } else if (data.type === 'error') {
           const errBox = document.createElement('div');
           errBox.className = 'stream-error';
           errBox.textContent = `Erro do modelo: ${data.message}`;
-          assistantMsgEl.appendChild(errBox);
+          body.insertBefore(errBox, citationsContainer);
         } else if (data.type === 'done') {
           if (data.conversation_id) currentConversationId = data.conversation_id;
           accumulated = data.content || accumulated;
@@ -635,19 +1177,30 @@ async function sendMessage() {
   } catch (err) {
     if (err.name === 'AbortError') {
       aborted = true;
+      if (!accumulated) bubble.innerHTML = '';
       const note = document.createElement('div');
       note.className = 'cancelled-note';
-      note.textContent = 'Geração cancelada.';
-      assistantMsgEl.appendChild(note);
+      note.textContent = 'Resposta interrompida.';
+      body.insertBefore(note, citationsContainer);
     } else {
-      bubble.innerHTML = `<p class="text-danger">[Erro de comunicação: ${escape(err.message)}]</p>`;
+      bubble.innerHTML = `<p class="text-danger">Erro de comunicação: ${escape(err.message)}</p>`;
     }
   } finally {
     isGenerating = false;
     activeAbortController = null;
-    btnSend.style.display = 'inline-flex';
-    btnStop.style.display = 'none';
-    btnStop.textContent = 'Parar';
+    assistantMsgEl.classList.remove('streaming');
+    if (bubble.querySelector('.thinking')) bubble.innerHTML = '';
+    if (!accumulated && !aborted && !body.querySelector('.stream-error') && !bubble.textContent.trim()) {
+      const errBox = document.createElement('div');
+      errBox.className = 'stream-error';
+      errBox.textContent = 'O modelo não respondeu. Confira se o motor do modo escolhido está rodando (status no canto inferior esquerdo).';
+      body.insertBefore(errBox, citationsContainer);
+    }
+    enhanceCodeBlocks(bubble);
+    bindMessageActions(assistantMsgEl, () => accumulated);
+    btnSend.hidden = false;
+    btnStop.hidden = true;
+    updateSendState();
     scrollToBottom();
     await loadConversations();
 
@@ -662,7 +1215,7 @@ async function sendMessage() {
 function abortGeneration(silent = false) {
   if (activeAbortController) {
     activeAbortController.abort();
-    if (!silent) btnStop.textContent = 'Cancelando...';
+    if (!silent) btnStop.title = 'Cancelando…';
   }
 }
 
@@ -671,19 +1224,73 @@ function renderMessage(role, content, sources = null) {
   msg.className = `message ${role}`;
   const bubble = document.createElement('div');
   bubble.className = 'message-bubble';
-  bubble.innerHTML = role === 'user' ? escape(content) : md(content || '');
-  msg.appendChild(bubble);
+  const actions = document.createElement('div');
+  actions.className = 'msg-actions';
 
-  if (sources && sources.length > 0) {
-    const box = document.createElement('div');
-    box.className = 'citations-box';
-    renderCitations(box, sources);
-    msg.appendChild(box);
+  if (role === 'user') {
+    bubble.textContent = content;
+    msg.appendChild(bubble);
+    msg.appendChild(actions);
+  } else {
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.textContent = avatarText(activeProfile());
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    bubble.innerHTML = md(content || '');
+    body.appendChild(bubble);
+    if (sources && sources.length > 0) {
+      const box = document.createElement('div');
+      box.className = 'citations-box';
+      renderCitations(box, sources);
+      body.appendChild(box);
+    }
+    body.appendChild(actions);
+    msg.appendChild(avatar);
+    msg.appendChild(body);
+    enhanceCodeBlocks(bubble);
   }
 
   messagesList.appendChild(msg);
+  if (content) bindMessageActions(msg, () => content);
   scrollToBottom();
   return msg;
+}
+
+function bindMessageActions(msg, getText) {
+  const actions = msg.querySelector('.msg-actions');
+  if (!actions || !getText()) return;
+  actions.innerHTML = '';
+  const add = (name, title, handler, extraClass = '') => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `icon-btn ${extraClass}`.trim();
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.innerHTML = icon(name);
+    b.addEventListener('click', () => handler(b));
+    actions.appendChild(b);
+    return b;
+  };
+  add('copy', 'Copiar', (b) => copyText(getText(), b));
+  if (msg.classList.contains('user')) {
+    add('pencil', 'Editar e reenviar', () => setPrompt(getText()));
+  } else {
+    const speak = add('volume', 'Ler em voz alta', () => speakText(getText()), 'btn-speak');
+    speak.hidden = !ttsAvailable;
+  }
+}
+
+function enhanceCodeBlocks(bubble) {
+  bubble.querySelectorAll('pre').forEach(pre => {
+    if (pre.querySelector('.code-copy')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'code-copy';
+    b.innerHTML = `${icon('copy')}Copiar`;
+    b.addEventListener('click', () => copyText(pre.querySelector('code') ? pre.querySelector('code').textContent : pre.textContent, b));
+    pre.appendChild(b);
+  });
 }
 
 function appendToolEvent(container, text, className) {
@@ -692,7 +1299,19 @@ function appendToolEvent(container, text, className) {
   line.className = `tool-event ${className || ''}`.trim();
   line.textContent = text;
   container.appendChild(line);
-  scrollToBottom();
+  const details = container.closest('details');
+  if (details) {
+    details.hidden = false;
+    const calls = container.querySelectorAll('.tool-event-running').length;
+    const summary = details.querySelector('.tool-summary');
+    if (summary) {
+      summary.textContent = calls
+        ? `Usou ${calls} ${calls === 1 ? 'ferramenta' : 'ferramentas'}`
+        : 'Avisos';
+    }
+    if (className === 'tool-event-auth' || className === 'tool-event-error') details.open = true;
+  }
+  scrollToBottom(true);
 }
 
 function renderCitations(container, sources) {
@@ -701,14 +1320,17 @@ function renderCitations(container, sources) {
     const pill = document.createElement('span');
     pill.className = 'citation-pill';
     const page = s.page ? `pág. ${s.page}` : 'página não informada';
-    pill.textContent = `📖 ${s.document || 'Documento'} (${page})`;
+    pill.innerHTML = icon('book');
+    pill.appendChild(document.createTextNode(`${s.document || 'Documento'} (${page})`));
     if (s.score != null) pill.title = `Relevância: ${s.score}`;
     container.appendChild(pill);
   });
 }
 
-function scrollToBottom() {
+// soft: only follow the stream when the user is already near the bottom.
+function scrollToBottom(soft = false) {
   const container = $('messagesContainer');
+  if (soft && container.scrollHeight - container.scrollTop - container.clientHeight > 160) return;
   container.scrollTop = container.scrollHeight;
 }
 
@@ -721,15 +1343,15 @@ async function checkPendingAuthorizations(force = false) {
     const pending = await api('/api/security/pending');
     if (pending.length > 0) {
       const act = pending[0];
-      authTitle.textContent = `Solicitação: ${String(act.action_type || '').toUpperCase()}`;
-      authDesc.textContent = `${act.description || 'Ação protegida'} | Alvo: ${act.resource || '—'} | Expira: ${act.expires_at_iso || '—'}`;
+      authTitle.textContent = `Autorizar: ${act.description || String(act.action_type || 'ação protegida')}`;
+      authDesc.textContent = `Alvo: ${act.resource || '—'} · expira ${act.expires_at_iso ? new Date(act.expires_at_iso).toLocaleTimeString('pt-BR') : '—'}`;
       authPayload.textContent = JSON.stringify(act.payload || {}, null, 2).slice(0, 3000);
-      authBar.style.display = 'flex';
+      authBar.hidden = false;
 
       btnApproveAction.onclick = () => resolveAuth(act.id, true, act.kind);
       btnRejectAction.onclick = () => resolveAuth(act.id, false, act.kind);
     } else {
-      authBar.style.display = 'none';
+      authBar.hidden = true;
     }
   } catch (err) {
     console.error('Pending auth check failed', err);
@@ -742,7 +1364,7 @@ async function resolveAuth(actionId, approved, kind) {
       method: 'POST',
       body: { action_id: actionId, approved }
     });
-    authBar.style.display = 'none';
+    authBar.hidden = true;
     if (kind === 'claude_code') {
       // Claude Code runs (or skips) the tool itself; the open stream shows it.
     } else if (data.status === 'executed') {
@@ -751,18 +1373,19 @@ async function resolveAuth(actionId, approved, kind) {
       renderMessage('assistant', `Ação **${approved ? 'não executada' : 'recusada'}**: ${data.status}`);
     }
   } catch (err) {
-    authBar.style.display = 'none';
-    renderMessage('assistant', `Falha ao resolver autorização: ${err.message}`);
+    authBar.hidden = true;
+    toast(`Falha ao resolver autorização: ${err.message}`, 'error');
   }
   checkPendingAuthorizations(kind === 'claude_code');
 }
 
 function renderToolResult(result) {
+  setEmptyState(false);
   const msg = renderMessage('assistant', '**Resultado da ferramenta:**');
   const pre = document.createElement('pre');
   pre.className = 'tool-result';
   pre.textContent = JSON.stringify(result, null, 2);
-  msg.appendChild(pre);
+  msg.querySelector('.msg-body').appendChild(pre);
 }
 
 // ----------------- Documents (RAG) -----------------
@@ -782,8 +1405,8 @@ function renderDocumentList(container, docs) {
   container.innerHTML = '';
   if (!docs.length) {
     const empty = document.createElement('p');
-    empty.className = 'hint';
-    empty.textContent = 'Nenhum documento indexado.';
+    empty.className = 'empty-hint';
+    empty.textContent = 'Nenhum documento ainda. Importe um PDF, TXT ou MD para consultar com citação de página.';
     container.appendChild(empty);
     return;
   }
@@ -791,9 +1414,11 @@ function renderDocumentList(container, docs) {
     const item = document.createElement('div');
     item.className = 'list-item';
     item.innerHTML = `
-      <span class="list-item-title">📄 ${escape(d.title)} (${d.total_pages} pág., ${d.total_chunks} trechos)</span>
-      <button class="btn-ghost btn-xs text-danger" title="Remover documento">✕</button>
-    `;
+      ${icon('book')}
+      <span class="list-item-title"><span class="doc-title"></span><span class="list-sub"></span></span>
+      <span class="item-actions"><button class="icon-btn danger" title="Remover documento">${icon('trash')}</button></span>`;
+    item.querySelector('.doc-title').textContent = d.title;
+    item.querySelector('.list-sub').textContent = `${d.total_pages} pág. · ${d.total_chunks} trechos`;
     item.querySelector('button').addEventListener('click', (e) => deleteDocument(d.id, e));
     container.appendChild(item);
   });
@@ -806,11 +1431,11 @@ async function handleFileUpload(e) {
 
   const ext = (file.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
   if (!['.pdf', '.txt', '.md'].includes(ext)) {
-    alert('Formato não suportado. Use PDF, TXT ou MD.');
+    toast('Formato não suportado. Use PDF, TXT ou MD.', 'error');
     return;
   }
   if (file.size > 25 * 1024 * 1024) {
-    alert('Arquivo maior que 25 MB.');
+    toast('Arquivo maior que 25 MB.', 'error');
     return;
   }
 
@@ -819,14 +1444,13 @@ async function handleFileUpload(e) {
   formData.append('collection', 'Geral');
   if (currentProjectId) formData.append('project_id', currentProjectId);
 
-  renderMessage('assistant', `⏳ Indexando documento local **${file.name}**...`);
-
+  toast(`Indexando ${file.name}…`);
   try {
     const data = await api('/api/documents/upload', { method: 'POST', body: formData });
-    renderMessage('assistant', `✅ Documento **${data.title}** indexado (${data.total_pages} páginas, ${data.total_chunks} trechos).`);
+    toast(`${data.title} indexado (${data.total_pages} páginas, ${data.total_chunks} trechos)`);
     await loadDocuments();
   } catch (err) {
-    renderMessage('assistant', `❌ Falha ao indexar: ${err.message}`);
+    toast(`Falha ao indexar: ${err.message}`, 'error');
   }
 }
 
@@ -836,8 +1460,9 @@ async function deleteDocument(docId, event) {
   try {
     await api(`/api/documents/${docId}`, { method: 'DELETE' });
     await loadDocuments();
+    toast('Documento removido');
   } catch (err) {
-    alert(`Falha ao excluir: ${err.message}`);
+    toast(`Falha ao excluir: ${err.message}`, 'error');
   }
 }
 
@@ -847,6 +1472,8 @@ function openLibraryModal() {
 }
 
 // ----------------- Memories -----------------
+const MEMORY_LABELS = { preference: 'Preferência', fact: 'Fato', decision: 'Decisão', project: 'Projeto', instruction: 'Instrução' };
+
 async function loadMemories() {
   try {
     const all = await api('/api/memories');
@@ -858,8 +1485,8 @@ async function loadMemories() {
     list.innerHTML = '';
     if (!memories.length) {
       const empty = document.createElement('p');
-      empty.className = 'hint';
-      empty.textContent = 'Nenhuma memória. Nada é salvo automaticamente.';
+      empty.className = 'empty-hint';
+      empty.textContent = 'Nenhuma memória. Adicione fatos e preferências que a assistente deve lembrar sempre.';
       list.appendChild(empty);
       return;
     }
@@ -871,18 +1498,17 @@ async function loadMemories() {
     memories.forEach(m => {
       const item = document.createElement('div');
       item.className = `list-item memory-item ${m.is_active ? '' : 'inactive'}`;
-      const scope = m.project_id ? `📁 ${escape(projectName(m.project_id))}` : '🌐 Global';
+      const scope = m.project_id ? projectName(m.project_id) : 'Global';
       item.innerHTML = `
-        <div class="memory-body">
-          <span class="list-item-title">📌 [${escape(m.category)}] ${escape(m.content)}</span>
-          <small class="hint">${scope} · ${m.is_active ? 'ativa' : 'inativa'}</small>
-        </div>
-        <div class="item-actions">
-          <button class="btn-ghost btn-xs" title="${m.is_active ? 'Desativar' : 'Ativar'}">${m.is_active ? '⏸' : '▶'}</button>
-          <button class="btn-ghost btn-xs" title="Editar">✎</button>
-          <button class="btn-ghost btn-xs text-danger" title="Excluir">✕</button>
-        </div>
-      `;
+        <span class="list-item-title"><span class="mem-text"></span><span class="list-sub"></span></span>
+        <span class="item-actions">
+          <button class="icon-btn" title="${m.is_active ? 'Desativar' : 'Ativar'}">${icon(m.is_active ? 'pause' : 'play')}</button>
+          <button class="icon-btn" title="Editar">${icon('pencil')}</button>
+          <button class="icon-btn danger" title="Excluir">${icon('trash')}</button>
+        </span>`;
+      item.querySelector('.mem-text').textContent = m.content;
+      item.querySelector('.list-sub').textContent =
+        `${MEMORY_LABELS[m.category] || m.category} · ${scope}${m.is_active ? '' : ' · inativa'}`;
       const [toggleBtn, editBtn, delBtn] = item.querySelectorAll('button');
       toggleBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -892,7 +1518,7 @@ async function loadMemories() {
             body: { content: m.content, category: m.category, is_active: !m.is_active }
           });
           await loadMemories();
-        } catch (err) { alert(`Falha: ${err.message}`); }
+        } catch (err) { toast(`Falha: ${err.message}`, 'error'); }
       });
       editBtn.addEventListener('click', (e) => { e.stopPropagation(); openMemoryModal(m); });
       delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteMemory(m.id); });
@@ -909,18 +1535,20 @@ async function deleteMemory(id, event) {
   try {
     await api(`/api/memories/${id}`, { method: 'DELETE' });
     await loadMemories();
+    toast('Memória excluída');
   } catch (err) {
-    alert(`Falha ao excluir: ${err.message}`);
+    toast(`Falha ao excluir: ${err.message}`, 'error');
   }
 }
 
 function openMemoryModal(mem = null) {
   $('memoryId').value = mem ? mem.id : '';
-  $('memoryModalTitle').textContent = mem ? 'Editar Memória' : 'Nova Memória';
+  $('memoryModalTitle').textContent = mem ? 'Editar memória' : 'Nova memória';
   $('memoryCategory').value = mem ? mem.category : 'preference';
   $('memoryContent').value = mem ? mem.content : '';
   updateMemoryProjectOptions(mem ? mem.project_id : currentProjectId);
   openModal('memoryModal');
+  $('memoryContent').focus();
 }
 
 async function saveMemory() {
@@ -930,7 +1558,7 @@ async function saveMemory() {
     content: $('memoryContent').value,
     project_id: $('memoryProject').value || null,
   };
-  if (!payload.content.trim()) { alert('Escreva o conteúdo da memória.'); return; }
+  if (!payload.content.trim()) { toast('Escreva o conteúdo da memória.', 'error'); return; }
 
   try {
     if (id) {
@@ -943,8 +1571,9 @@ async function saveMemory() {
     }
     closeModal('memoryModal');
     await loadMemories();
+    toast('Memória salva');
   } catch (err) {
-    alert(`Falha ao salvar memória: ${err.message}`);
+    toast(`Falha ao salvar memória: ${err.message}`, 'error');
   }
 }
 
@@ -956,8 +1585,8 @@ async function loadProjects() {
     list.innerHTML = '';
     if (!projectsCache.length) {
       const empty = document.createElement('p');
-      empty.className = 'hint';
-      empty.textContent = 'Nenhum projeto. Crie um para isolar conversas, memórias e documentos.';
+      empty.className = 'empty-hint';
+      empty.textContent = 'Nenhum projeto. Crie um para separar conversas, memórias e documentos.';
       list.appendChild(empty);
     }
     projectsCache.forEach(p => {
@@ -965,12 +1594,14 @@ async function loadProjects() {
       item.className = `list-item ${p.id === currentProjectId ? 'active' : ''}`;
       item.dataset.projectId = p.id;
       item.innerHTML = `
-        <span class="list-item-title">📁 ${escape(p.name)}</span>
-        <div class="item-actions">
-          <button class="btn-ghost btn-xs" title="Editar projeto">✎</button>
-          <button class="btn-ghost btn-xs text-danger" title="Excluir projeto">✕</button>
-        </div>
-      `;
+        ${icon('folder')}
+        <span class="list-item-title"></span>
+        <span class="item-actions">
+          <button class="icon-btn" title="Editar projeto">${icon('pencil')}</button>
+          <button class="icon-btn danger" title="Excluir projeto">${icon('trash')}</button>
+        </span>`;
+      item.querySelector('.list-item-title').textContent = p.name;
+      item.title = p.id === currentProjectId ? 'Clique para sair do projeto' : 'Clique para entrar no projeto';
       item.addEventListener('click', () => selectProject(p));
       const [editBtn, delBtn] = item.querySelectorAll('button');
       editBtn.addEventListener('click', (e) => { e.stopPropagation(); openProjectModal(p); });
@@ -991,19 +1622,19 @@ async function selectProject(project) {
   }
   updateProjectTag();
   startNewChat();
-  await Promise.all([loadConversations(), loadDocuments(), loadMemories()]);
+  await Promise.all([loadProjects(), loadConversations(), loadDocuments(), loadMemories()]);
 }
 
 function updateProjectTag() {
   const tag = $('activeProjectTag');
   if (!currentProjectId) {
-    tag.style.display = 'none';
-    tag.textContent = 'Sem Projeto';
+    tag.hidden = true;
+    tag.textContent = '';
     return;
   }
   const p = projectsCache.find(x => x.id === currentProjectId);
-  tag.textContent = `Projeto: ${p ? p.name : currentProjectId}`;
-  tag.style.display = 'inline-block';
+  tag.textContent = p ? p.name : 'Projeto';
+  tag.hidden = false;
   document.querySelectorAll('#projectsList .list-item').forEach((item) => {
     item.classList.toggle('active', item.dataset.projectId === currentProjectId);
   });
@@ -1011,11 +1642,12 @@ function updateProjectTag() {
 
 function openProjectModal(project = null) {
   $('projectId').value = project ? project.id : '';
-  $('projectModalTitle').textContent = project ? 'Editar Projeto' : 'Novo Projeto';
+  $('projectModalTitle').textContent = project ? 'Editar projeto' : 'Novo projeto';
   $('projectName').value = project ? project.name : '';
   $('projectDescription').value = project ? (project.description || '') : '';
   $('projectInstructions').value = project ? (project.instructions || '') : '';
   openModal('projectModal');
+  $('projectName').focus();
 }
 
 async function saveProject() {
@@ -1025,23 +1657,22 @@ async function saveProject() {
     description: $('projectDescription').value,
     instructions: $('projectInstructions').value,
   };
-  if (!payload.name) { alert('Informe o nome do projeto.'); return; }
+  if (!payload.name) { toast('Informe o nome do projeto.', 'error'); return; }
 
   try {
-    let saved;
     if (id) {
       await api(`/api/projects/${id}`, { method: 'PUT', body: payload });
-      saved = { id, ...payload };
     } else {
-      saved = await api('/api/projects', { method: 'POST', body: payload });
+      const saved = await api('/api/projects', { method: 'POST', body: payload });
       currentProjectId = saved.id;
     }
     closeModal('projectModal');
     await loadProjects();
     updateProjectTag();
-    if (!id) startNewChat();
+    if (!id) { startNewChat(); await Promise.all([loadConversations(), loadDocuments(), loadMemories()]); }
+    toast('Projeto salvo');
   } catch (err) {
-    alert(`Falha ao salvar projeto: ${err.message}`);
+    toast(`Falha ao salvar projeto: ${err.message}`, 'error');
   }
 }
 
@@ -1052,8 +1683,9 @@ async function deleteProject(project) {
     await api(`/api/projects/${project.id}`, { method: 'DELETE' });
     if (currentProjectId === project.id) { currentProjectId = null; updateProjectTag(); startNewChat(); }
     await Promise.all([loadProjects(), loadMemories(), loadDocuments(), loadConversations()]);
+    toast('Projeto excluído');
   } catch (err) {
-    alert(`Falha ao excluir projeto: ${err.message}`);
+    toast(`Falha ao excluir projeto: ${err.message}`, 'error');
   }
 }
 
@@ -1069,61 +1701,16 @@ function updateMemoryProjectOptions(selected = null) {
   select.value = selected || currentProjectId || '';
 }
 
-// ----------------- Personality & Settings -----------------
-async function loadPersonalitySettings() {
-  try {
-    const list = await api('/api/personalities');
-    const def = list.find(p => p.is_default) || list[0];
-    if (def) {
-      currentPersonalityId = def.id;
-      $('settingName').value = def.name;
-      $('settingInstructions').value = def.system_instructions;
-      $('settingTone').value = def.tone || 'prestativo';
-      $('sliderFormality').value = def.formality || 3;
-      $('valFormality').textContent = def.formality || 3;
-      $('sliderObjectivity').value = def.objectivity || 4;
-      $('valObjectivity').textContent = def.objectivity || 4;
-      $('sliderDetail').value = def.detail_level || 3;
-      $('valDetail').textContent = def.detail_level || 3;
-      $('activePersonalityTag').textContent = def.name;
-    }
-  } catch (err) {
-    console.error('Failed to load personality', err);
-  }
-}
-
-function openSettingsModal() {
-  loadPersonalitySettings();
+// ----------------- Settings -----------------
+async function openSettingsModal(section = null) {
+  openModal('settingsModal');
+  if (section) showSettingsSection(section);
+  fillPreferenceControls();
+  await loadProfiles();
+  loadProfileIntoEditor(profilesCache.find(p => p.id === (editorProfileId || currentPersonalityId)) || activeProfile());
   loadModels();
   loadBackups();
-  openModal('settingsModal');
-}
-
-async function savePersonalitySettings() {
-  const payload = {
-    id: currentPersonalityId,
-    name: $('settingName').value.trim(),
-    system_instructions: $('settingInstructions').value.trim(),
-    tone: $('settingTone').value,
-    formality: parseInt($('sliderFormality').value, 10),
-    objectivity: parseInt($('sliderObjectivity').value, 10),
-    detail_level: parseInt($('sliderDetail').value, 10),
-    is_default: true
-  };
-  if (!payload.name || !payload.system_instructions) {
-    alert('Nome e instruções não podem ficar vazios.');
-    return;
-  }
-
-  try {
-    const saved = await api('/api/personalities', { method: 'POST', body: payload });
-    currentPersonalityId = saved.id;
-    closeModal('settingsModal');
-    $('activePersonalityTag').textContent = saved.name;
-    alert('Personalidade atualizada com sucesso!');
-  } catch (err) {
-    alert(`Falha ao salvar personalidade: ${err.message}`);
-  }
+  checkHealth();
 }
 
 // ----------------- Backup -----------------
@@ -1133,7 +1720,7 @@ async function loadBackups() {
     const backups = await api('/api/backups');
     list.innerHTML = '';
     if (!backups.length) {
-      list.innerHTML = '<p class="hint">Nenhum backup ainda.</p>';
+      list.innerHTML = '<p class="empty-hint">Nenhum backup ainda.</p>';
       return;
     }
     backups.forEach(b => {
@@ -1143,8 +1730,8 @@ async function loadBackups() {
       row.innerHTML = `
         <span>${escape(b.created_at)} · ${size} KB</span>
         <span class="backup-row-actions">
-          <a class="btn btn-xs btn-ghost" href="/api/backups/${encodeURIComponent(b.name)}" download>Baixar</a>
-          <button class="btn btn-xs btn-secondary">Restaurar</button>
+          <a class="btn btn-sm btn-ghost" href="/api/backups/${encodeURIComponent(b.name)}" download>Baixar</a>
+          <button class="btn btn-sm btn-secondary">Restaurar</button>
         </span>
       `;
       row.querySelector('button').addEventListener('click', () => restoreBackup(b.name));
@@ -1157,7 +1744,7 @@ async function loadBackups() {
 
 async function createBackupNow() {
   const status = $('backupStatus');
-  status.textContent = 'Criando...';
+  status.textContent = 'Criando…';
   try {
     const data = await api('/api/backup', { method: 'POST', body: { label: 'manual' } });
     status.textContent = `Backup criado: ${data.name}`;
@@ -1174,22 +1761,31 @@ async function restoreBackup(name) {
   if (typed !== 'RESTAURAR') return;
   try {
     const result = await api('/api/backup/restore', { method: 'POST', body: { name, confirm: true } });
-    alert(`Backup restaurado. Segurança criada antes: ${result.pre_restore_backup}`);
+    toast(`Backup restaurado. Segurança criada antes: ${result.pre_restore_backup}`);
     closeModal('settingsModal');
     startNewChat();
-    await Promise.all([loadConversations(), loadProjects(), loadDocuments(), loadMemories(), loadPersonalitySettings()]);
+    await Promise.all([loadConversations(), loadProjects(), loadDocuments(), loadMemories(), loadProfiles(), loadPreferences()]);
   } catch (err) {
-    alert(`Falha ao restaurar: ${err.message}`);
+    toast(`Falha ao restaurar: ${err.message}`, 'error');
   }
 }
 
 // ----------------- Utilities & Modals -----------------
-function openModal(id) { $(id).style.display = 'flex'; }
-function closeModal(id) { $(id).style.display = 'none'; }
-function setPrompt(text) { chatInput.value = text; chatInput.focus(); }
+function openModal(id) { $(id).hidden = false; }
+function closeModal(id) {
+  $(id).hidden = true;
+  if (id === 'settingsModal') flushPrefs();
+}
+function setPrompt(text) {
+  chatInput.value = text;
+  autoGrow();
+  updateSendState();
+  chatInput.focus();
+  chatInput.setSelectionRange(text.length, text.length);
+}
 
 async function exportCurrentChat() {
-  if (!currentConversationId) { alert('Nenhuma conversa selecionada.'); return; }
+  if (!currentConversationId) { toast('Nenhuma conversa selecionada.', 'error'); return; }
   try {
     const data = await api(`/api/conversations/${currentConversationId}/export?format=md`);
     const blob = new Blob([data.content], { type: 'text/markdown' });
@@ -1199,20 +1795,21 @@ async function exportCurrentChat() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   } catch (err) {
-    alert(`Falha ao exportar: ${err.message}`);
+    toast(`Falha ao exportar: ${err.message}`, 'error');
   }
 }
 
 async function deleteCurrentChat() {
-  if (!currentConversationId) { alert('Nenhuma conversa selecionada.'); return; }
-  if (!confirm('Deseja excluir esta conversa permanentemente?')) return;
+  if (!currentConversationId) { toast('Nenhuma conversa selecionada.', 'error'); return; }
+  if (!confirm('Excluir esta conversa permanentemente?')) return;
   if (isGenerating) abortGeneration(true);
   try {
     await api(`/api/conversations/${currentConversationId}`, { method: 'DELETE' });
     startNewChat();
     await loadConversations();
+    toast('Conversa excluída');
   } catch (err) {
-    alert(`Falha ao excluir: ${err.message}`);
+    toast(`Falha ao excluir: ${err.message}`, 'error');
   }
 }
 
@@ -1223,13 +1820,14 @@ async function deleteConversationById(id, event) {
     await api(`/api/conversations/${id}`, { method: 'DELETE' });
     if (currentConversationId === id) startNewChat();
     await loadConversations();
+    toast('Conversa excluída');
   } catch (err) {
-    alert(`Falha ao excluir: ${err.message}`);
+    toast(`Falha ao excluir: ${err.message}`, 'error');
   }
 }
 
 // Expose for debugging from the webview devtools.
 window.assistantApp = {
   startNewChat, sendMessage, abortGeneration, openLibraryModal,
-  openProjectModal, openMemoryModal, checkPendingAuthorizations
+  openProjectModal, openMemoryModal, checkPendingAuthorizations, openSettingsModal
 };

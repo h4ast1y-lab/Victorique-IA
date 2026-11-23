@@ -1,6 +1,7 @@
 import asyncio
 import atexit
 import json
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -17,6 +18,8 @@ from app.memory.conversation_store import conversation_store
 from app.memory.memory_store import memory_store
 from app.memory.project_store import project_store
 from app.core.personality import personality_manager
+from app.core import preferences
+from app.core.sse import sse_event
 from app.core.assistant import assistant_engine
 from app.core.backup import create_backup, list_backups, backup_path, restore_backup
 from app.models.ollama_client import ollama_client
@@ -30,6 +33,7 @@ from app.voice import tts_engine, stt_engine
 
 # Initialize database schema on startup
 init_db()
+preferences.apply_to_settings()
 
 
 app = FastAPI(title=settings.app_name, version=settings.version)
@@ -116,6 +120,8 @@ class PersonalityCreate(BaseModel):
     objectivity: Optional[int] = 4
     detail_level: Optional[int] = 3
     is_default: Optional[bool] = False
+    avatar: Optional[str] = ""
+    emoji_level: Optional[int] = 2
 
 class MemoryCreate(BaseModel):
     category: str
@@ -291,6 +297,19 @@ async def update_settings(req: SettingsUpdate):
         "default_model": _current_model(),
         "default_backend": _current_backend(),
     }
+
+
+@app.get("/api/preferences")
+async def get_preferences():
+    return preferences.load()
+
+
+@app.post("/api/preferences")
+async def update_preferences(changes: Dict[str, Any]):
+    try:
+        return preferences.update(changes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/claude-code/status")
@@ -500,6 +519,11 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                 if await request.is_disconnected():
                     break
                 yield chunk
+        except Exception as exc:  # engine offline etc.: tell the UI instead of cutting the stream
+            logging.getLogger(__name__).exception("Falha na geração")
+            message = f"Não consegui falar com o motor ({backend}): {exc}"
+            yield sse_event({"type": "error", "message": message})
+            yield sse_event({"type": "done", "conversation_id": conv["id"], "content": ""})
         finally:
             # Closing the async generator closes the Ollama HTTP stream too.
             await agen.aclose()
@@ -589,10 +613,25 @@ async def create_personality(req: PersonalityCreate):
             formality=req.formality or 3,
             objectivity=req.objectivity or 4,
             detail_level=req.detail_level or 3,
-            is_default=req.is_default or False
+            is_default=req.is_default or False,
+            avatar=req.avatar or "",
+            emoji_level=req.emoji_level or 2,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/personalities/{p_id}/factory")
+async def factory_personality(p_id: str):
+    profile = personality_manager.factory_profile(p_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Este perfil não tem versão original.")
+    return profile
+
+@app.post("/api/personalities/{p_id}/default")
+async def set_default_personality(p_id: str):
+    if not personality_manager.set_default(p_id):
+        raise HTTPException(status_code=404, detail="Perfil não encontrado.")
+    return {"status": "updated", "default_id": p_id}
 
 @app.delete("/api/personalities/{p_id}")
 async def delete_personality(p_id: str):

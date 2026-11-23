@@ -164,7 +164,8 @@ console.log(JSON.stringify({
   js: render('[clique](javascript:alert(1))'),
   proto: render('[clique](//evil.example/x)'),
   bold: render('**forte**'),
-  code: render('```html\\n<script>alert(1)</script>\\n```')
+  code: render('```html\\n<script>alert(1)</script>\\n```'),
+  table: render('| A | <b>B</b> |\\n|---|:-:|\\n| **1** | 2 |')
 }));
 """,
         encoding="utf-8",
@@ -186,3 +187,6 @@ console.log(JSON.stringify({
     assert "href" not in data["proto"]
     assert "<strong>forte</strong>" in data["bold"]
     assert "&lt;script&gt;" in data["code"] and "<script>" not in data["code"]
+    assert "<table>" in data["table"] and "<th>A</th>" in data["table"]
+    assert "<strong>1</strong>" in data["table"] and "text-align:center" in data["table"]
+    assert "&lt;b&gt;" in data["table"] and "<b>" not in data["table"]

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark" data-accent="terracota">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,263 +8,509 @@
   <link rel="stylesheet" href="/ui/css/style.css">
 </head>
 <body>
-  <div class="app-layout">
+  <!-- Icon sprite -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></symbol>
+      <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+      <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+      <symbol id="i-clip" viewBox="0 0 24 24"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+      <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+      <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+      <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+      <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/></symbol>
+      <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M19 9h3M19 15h3M2 9h3M2 15h3"/></symbol>
+      <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 22a10 10 0 1 1 10-10c0 2.8-2.2 4-4 4h-2a2 2 0 0 0-1 3.7A1.5 1.5 0 0 1 12 22z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="12" cy="7" r="1"/><circle cx="16.5" cy="10.5" r="1"/></symbol>
+      <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M20 12c0 1.7-3.6 3-8 3s-8-1.3-8-3M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-5M12 8h.01"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+      <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/></symbol>
+      <symbol id="i-duplicate" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="app-layout" id="appLayout">
     <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
         <div class="brand">
-          <div class="brand-icon">⚡</div>
-          <div class="brand-info">
-            <h2>Victorique</h2>
-            <span class="status-indicator online" id="statusPill">● Verificando Ollama...</span>
-          </div>
+          <div class="brand-mark" id="brandAvatar">V</div>
+          <span class="brand-name" id="brandName">Victorique</span>
+          <button class="icon-btn" id="btnCollapseSidebar" title="Recolher barra lateral (Ctrl+B)" aria-label="Recolher barra lateral">
+            <svg class="ic"><use href="#i-sidebar"/></svg>
+          </button>
         </div>
-        <button class="btn btn-primary btn-new-chat" id="btnNewChat">
-          <span>+</span> Nova Conversa
+
+        <button class="new-chat-btn" id="btnNewChat" title="Nova conversa (Ctrl+Shift+O)">
+          <span class="new-chat-icon"><svg class="ic"><use href="#i-plus"/></svg></span>
+          Nova conversa
         </button>
+
+        <nav class="side-nav" aria-label="Seções">
+          <button class="nav-tab active" data-tab="conversations"><svg class="ic"><use href="#i-chat"/></svg>Conversas</button>
+          <button class="nav-tab" data-tab="projects"><svg class="ic"><use href="#i-folder"/></svg>Projetos</button>
+          <button class="nav-tab" data-tab="library"><svg class="ic"><use href="#i-book"/></svg>Biblioteca</button>
+          <button class="nav-tab" data-tab="memories"><svg class="ic"><use href="#i-bookmark"/></svg>Memórias</button>
+        </nav>
       </div>
 
-      <!-- Navigation Tabs -->
-      <nav class="nav-tabs">
-        <button class="nav-tab active" data-tab="conversations">💬 Conversas</button>
-        <button class="nav-tab" data-tab="projects">📁 Projetos</button>
-        <button class="nav-tab" data-tab="library">📚 Biblioteca</button>
-        <button class="nav-tab" data-tab="memories">🧠 Memórias</button>
-      </nav>
-
-      <!-- Sidebar Tab Views -->
       <div class="sidebar-content">
         <div class="tab-pane active" id="paneConversations">
-          <div class="search-box">
-            <input type="text" id="searchConversations" placeholder="Pesquisar conversas...">
-          </div>
+          <label class="search-box">
+            <svg class="ic"><use href="#i-search"/></svg>
+            <input type="text" id="searchConversations" placeholder="Buscar conversas (Ctrl+K)">
+          </label>
           <div class="conversations-list" id="conversationsList"></div>
         </div>
 
         <div class="tab-pane" id="paneProjects">
           <div class="pane-header">
             <h3>Projetos</h3>
-            <button class="btn btn-xs btn-secondary" id="btnCreateProject">+ Novo</button>
+            <button class="chip-btn" id="btnCreateProject"><svg class="ic"><use href="#i-plus"/></svg>Novo</button>
           </div>
           <div class="projects-list" id="projectsList"></div>
         </div>
 
         <div class="tab-pane" id="paneLibrary">
           <div class="pane-header">
-            <h3>Documentos (RAG)</h3>
-            <button class="btn btn-xs btn-primary" id="btnUploadDoc">+ Importar</button>
+            <h3>Documentos</h3>
+            <button class="chip-btn" id="btnUploadDoc"><svg class="ic"><use href="#i-plus"/></svg>Importar</button>
           </div>
           <div class="documents-list" id="documentsList"></div>
         </div>
 
         <div class="tab-pane" id="paneMemories">
           <div class="pane-header">
-            <h3>Memórias Fixas</h3>
-            <button class="btn btn-xs btn-secondary" id="btnCreateMemory">+ Adicionar</button>
+            <h3>Memórias fixas</h3>
+            <button class="chip-btn" id="btnCreateMemory"><svg class="ic"><use href="#i-plus"/></svg>Adicionar</button>
           </div>
           <div class="memories-list" id="memoriesList"></div>
         </div>
       </div>
 
       <div class="sidebar-footer">
-        <button class="btn-icon" id="btnOpenSettings" title="Configurações e Personalidade">
-          ⚙️ <span>Configurações</span>
+        <button class="user-row" id="btnOpenSettings" title="Configurações (Ctrl+,)">
+          <span class="user-avatar" id="userAvatar">?</span>
+          <span class="user-meta">
+            <span class="user-name" id="userNameLabel">Você</span>
+            <span class="status-indicator" id="statusPill">Verificando…</span>
+          </span>
+          <svg class="ic"><use href="#i-sliders"/></svg>
         </button>
       </div>
     </aside>
 
     <!-- Main Chat Workspace -->
-    <main class="chat-main">
+    <main class="chat-main is-empty" id="chatMain">
       <header class="chat-header">
+        <button class="icon-btn" id="btnExpandSidebar" title="Mostrar barra lateral (Ctrl+B)" aria-label="Mostrar barra lateral">
+          <svg class="ic"><use href="#i-sidebar"/></svg>
+        </button>
         <div class="chat-header-info">
-          <h2 id="currentChatTitle">Nova Conversa</h2>
-          <div class="chat-tags">
-            <span class="tag tag-model" id="activeModelTag">—</span>
-            <span class="tag tag-personality" id="activePersonalityTag">Padrão</span>
-            <span class="tag tag-project" id="activeProjectTag" style="display:none;">Sem Projeto</span>
-            <span class="tag tag-claude" id="claudeBadge" hidden title="Neste modo as mensagens são processadas pela Anthropic, não no seu computador.">Claude Code — dados enviados à Anthropic</span>
-          </div>
+          <h2 id="currentChatTitle" title="Clique para renomear">Nova conversa</h2>
+          <span class="tag tag-project" id="activeProjectTag" hidden></span>
+          <span class="tag tag-claude" id="claudeBadge" hidden title="Neste modo as mensagens são processadas pela Anthropic, não no seu computador.">Dados enviados à Anthropic</span>
         </div>
         <div class="chat-header-actions">
-          <select id="modeSelect" class="mode-select" title="Onde a Victorique pensa">
-            <option value="llama-cpp">Local (llama.cpp)</option>
-            <option value="ollama">Local (Ollama)</option>
-            <option value="claude-code">Claude Code</option>
-          </select>
-          <button class="btn btn-sm btn-ghost" id="btnExportChat" title="Exportar conversa">📥 Exportar</button>
-          <button class="btn btn-sm btn-ghost text-danger" id="btnDeleteChat" title="Excluir conversa">🗑️</button>
+          <button class="icon-btn" id="btnExportChat" title="Exportar conversa em Markdown" aria-label="Exportar conversa"><svg class="ic"><use href="#i-download"/></svg></button>
+          <button class="icon-btn danger" id="btnDeleteChat" title="Excluir conversa" aria-label="Excluir conversa"><svg class="ic"><use href="#i-trash"/></svg></button>
         </div>
       </header>
 
       <section class="messages-container" id="messagesContainer">
-        <div class="welcome-screen" id="welcomeScreen">
-          <div class="welcome-avatar">⚡</div>
-          <h1>Como posso ajudar hoje?</h1>
-          <p>Assistente local: conversas, memórias e documentos ficam no seu computador. Nenhuma conexão externa acontece sem sua autorização.</p>
-          <div class="quick-cards">
-            <div class="quick-card" data-quick="tools">
-              <strong>🛠️ Ferramentas & Sistema</strong>
-              <span>Conheça as capacidades locais do assistente.</span>
-            </div>
-            <div class="quick-card" data-quick="calc">
-              <strong>🧮 Ações Livres</strong>
-              <span>Teste cálculos matemáticos e consultas seguras.</span>
-            </div>
-            <div class="quick-card" data-quick="library">
-              <strong>📚 Consultar Documentos</strong>
-              <span>Envie um PDF/TXT/MD para pesquisa com citação de página.</span>
-            </div>
+        <div class="thread">
+          <div class="welcome-screen" id="welcomeScreen">
+            <div class="welcome-mark" id="welcomeAvatar">V</div>
+            <h1 id="welcomeGreeting">Boa noite</h1>
+            <p class="welcome-sub" id="welcomeSub">Em que mistério vamos mexer hoje?</p>
           </div>
+          <div class="messages-list" id="messagesList"></div>
         </div>
-        <div class="messages-list" id="messagesList"></div>
       </section>
 
       <footer class="chat-input-area">
-        <div class="auth-bar" id="authBar" style="display: none;">
-          <div class="auth-icon">⚠️</div>
-          <div class="auth-info">
-            <strong id="authTitle">Ação requer autorização</strong>
-            <p id="authDesc">O assistente deseja executar uma operação protegida.</p>
-            <pre class="auth-payload" id="authPayload"></pre>
-          </div>
-          <div class="auth-actions">
-            <button class="btn btn-sm btn-primary" id="btnApproveAction">Autorizar</button>
-            <button class="btn btn-sm btn-secondary" id="btnRejectAction">Recusar</button>
-          </div>
-        </div>
-
-        <form class="chat-input-form" id="chatForm">
-          <textarea
-            id="chatInput"
-            placeholder="Digite sua mensagem... (Shift + Enter para quebra de linha)"
-            rows="1"
-          ></textarea>
-          <div class="input-actions">
-            <button type="button" class="btn-icon" id="btnAttachDoc" title="Indexar documento para consulta">📎</button>
-            <input type="file" id="fileInput" accept=".pdf,.txt,.md" style="display: none;">
-            <button type="submit" class="btn btn-primary btn-send" id="btnSend">Enviar</button>
-            <button type="button" class="btn btn-secondary btn-stop" id="btnStop" style="display: none;">Parar</button>
-            <div class="voice-controls">
-              <span class="voice-status" id="voiceStatus">Voz: iniciando…</span>
-              <button type="button" class="btn btn-voice btn-voice-listen" id="btnVoiceListen" title="Ouvir microfone (STT)">🎤 Ouvir</button>
-              <button type="button" class="btn btn-voice btn-voice-speak" id="btnVoiceSpeak" title="Falar última resposta (TTS)">🔊 Falar</button>
+        <div class="composer-wrap">
+          <div class="auth-bar" id="authBar" hidden>
+            <div class="auth-icon"><svg class="ic"><use href="#i-shield"/></svg></div>
+            <div class="auth-info">
+              <strong id="authTitle">Ação requer autorização</strong>
+              <p id="authDesc">A assistente quer executar uma operação protegida.</p>
+              <details class="auth-details">
+                <summary>Ver detalhes</summary>
+                <pre class="auth-payload" id="authPayload"></pre>
+              </details>
+            </div>
+            <div class="auth-actions">
+              <button class="btn btn-secondary btn-sm" id="btnRejectAction">Recusar</button>
+              <button class="btn btn-primary btn-sm" id="btnApproveAction">Autorizar</button>
             </div>
           </div>
-        </form>
+
+          <form class="composer" id="chatForm">
+            <textarea id="chatInput" placeholder="Pergunte qualquer coisa à Victorique" rows="1" aria-label="Mensagem"></textarea>
+            <div class="composer-bar">
+              <div class="composer-left">
+                <button type="button" class="icon-btn" id="btnAttachDoc" title="Anexar documento à biblioteca (PDF, TXT, MD)" aria-label="Anexar documento">
+                  <svg class="ic"><use href="#i-clip"/></svg>
+                </button>
+                <input type="file" id="fileInput" accept=".pdf,.txt,.md" hidden>
+                <div class="menu-anchor">
+                  <button type="button" class="pill-btn" id="btnProfileMenu" title="Perfil da assistente" aria-haspopup="true">
+                    <span class="pill-avatar" id="profilePillAvatar">V</span>
+                    <span id="profilePillName">Victorique</span>
+                    <svg class="ic ic-sm"><use href="#i-down"/></svg>
+                  </button>
+                  <div class="popover" id="profileMenu" hidden role="menu"></div>
+                </div>
+              </div>
+              <div class="composer-right">
+                <label class="mode-pill" title="Onde a Victorique pensa">
+                  <span class="status-dot" id="statusDot"></span>
+                  <select id="modeSelect" aria-label="Modo">
+                    <option value="llama-cpp">Local · llama.cpp</option>
+                    <option value="ollama">Local · Ollama</option>
+                    <option value="claude-code">Claude Code</option>
+                  </select>
+                  <svg class="ic ic-sm"><use href="#i-down"/></svg>
+                </label>
+                <button type="button" class="icon-btn" id="btnVoiceListen" title="Ditar pelo microfone" aria-label="Ditar pelo microfone">
+                  <svg class="ic"><use href="#i-mic"/></svg>
+                </button>
+                <button type="submit" class="send-btn" id="btnSend" title="Enviar" aria-label="Enviar">
+                  <svg class="ic"><use href="#i-up"/></svg>
+                </button>
+                <button type="button" class="send-btn stop" id="btnStop" title="Parar resposta" aria-label="Parar resposta" hidden>
+                  <svg class="ic"><use href="#i-stop"/></svg>
+                </button>
+              </div>
+            </div>
+          </form>
+          <div class="suggestions" id="suggestions"></div>
+          <p class="composer-note" id="composerNote">A Victorique pode errar. Confira informações importantes.</p>
+        </div>
       </footer>
     </main>
   </div>
 
-  <!-- Settings Modal -->
-  <div class="modal-backdrop" id="settingsModal" style="display: none;">
-    <div class="modal">
-      <div class="modal-header">
-        <h3>Configurações & Personalidade</h3>
-        <button class="btn-close" data-close="settingsModal">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label>Modelo de Linguagem (Ollama local)</label>
-          <select id="settingModel"></select>
-          <small class="hint" id="modelHint"></small>
-          <small class="hint" id="runtimeInfo">—</small>
-        </div>
-        <div class="form-group">
-          <label>Nome do Assistente</label>
-          <input type="text" id="settingName" value="Assistente Pessoal">
-        </div>
-        <div class="form-group">
-          <label>Instruções Gerais de Comportamento</label>
-          <textarea id="settingInstructions" rows="3"></textarea>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Tom de Comunicação</label>
-            <select id="settingTone">
-              <option value="prestativo">Prestativo & Empático</option>
-              <option value="tecnico">Técnico & Preciso</option>
-              <option value="conciso">Direto & Minimalista</option>
-              <option value="didatico">Didático & Educativo</option>
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+  <!-- Settings -->
+  <div class="modal-backdrop" id="settingsModal" hidden>
+    <div class="modal modal-settings" role="dialog" aria-labelledby="settingsTitle">
+      <aside class="settings-nav">
+        <h3 id="settingsTitle">Configurações</h3>
+        <button class="settings-tab active" data-section="general"><svg class="ic"><use href="#i-user"/></svg>Geral</button>
+        <button class="settings-tab" data-section="profiles"><svg class="ic"><use href="#i-sparkle"/></svg>Perfis da assistente</button>
+        <button class="settings-tab" data-section="model"><svg class="ic"><use href="#i-cpu"/></svg>Modelo e respostas</button>
+        <button class="settings-tab" data-section="appearance"><svg class="ic"><use href="#i-palette"/></svg>Aparência</button>
+        <button class="settings-tab" data-section="voice"><svg class="ic"><use href="#i-mic"/></svg>Voz</button>
+        <button class="settings-tab" data-section="data"><svg class="ic"><use href="#i-database"/></svg>Dados e backup</button>
+        <button class="settings-tab" data-section="about"><svg class="ic"><use href="#i-info"/></svg>Sobre e atalhos</button>
+      </aside>
+
+      <div class="settings-body">
+        <button class="icon-btn modal-close" data-close="settingsModal" aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button>
+
+        <!-- Geral -->
+        <section class="settings-section active" data-section="general">
+          <h2>Geral</h2>
+          <p class="section-lead">O que a assistente sabe sobre você. Vale para todos os perfis e modos.</p>
+          <div class="field">
+            <label for="prefUserName">Como devo chamar você?</label>
+            <input type="text" id="prefUserName" maxlength="60" placeholder="Seu nome ou apelido" data-pref="user_name">
+          </div>
+          <div class="field">
+            <label for="prefUserAbout">O que a assistente deve saber sobre você</label>
+            <textarea id="prefUserAbout" rows="5" maxlength="2000" data-pref="user_about" placeholder="Ex.: Sou estudante de engenharia, uso Windows, prefiro exemplos práticos e respostas com passos numerados."></textarea>
+            <small class="hint"><span id="aboutCount">0</span>/2000 · enviado junto com cada conversa</small>
+          </div>
+          <div class="field">
+            <label for="prefLanguage">Idioma das respostas</label>
+            <select id="prefLanguage" data-pref="response_language">
+              <option value="auto">Automático (o mesmo da sua mensagem)</option>
+              <option value="pt-BR">Português do Brasil</option>
+              <option value="en">Inglês</option>
+              <option value="es">Espanhol</option>
             </select>
           </div>
-          <div class="form-group">
-            <label>Privacidade</label>
-            <small class="hint">100% local. Internet só com autorização explícita.</small>
+          <div class="toggle-row">
+            <div><strong>Enter envia a mensagem</strong><small>Desligado: Enter quebra linha e Ctrl+Enter envia.</small></div>
+            <input type="checkbox" class="switch" data-pref="enter_to_send">
           </div>
-        </div>
-        <div class="sliders-grid">
-          <div class="slider-group">
-            <label>Formalidade (1 = Informal, 5 = Muito Formal): <span id="valFormality">3</span></label>
-            <input type="range" id="sliderFormality" min="1" max="5" value="3">
+          <div class="toggle-row">
+            <div><strong>Mostrar sugestões na tela inicial</strong><small>Atalhos de pergunta abaixo da caixa de mensagem.</small></div>
+            <input type="checkbox" class="switch" data-pref="show_suggestions">
           </div>
-          <div class="slider-group">
-            <label>Objetividade (1 = Conversador, 5 = Direto): <span id="valObjectivity">4</span></label>
-            <input type="range" id="sliderObjectivity" min="1" max="5" value="4">
-          </div>
-          <div class="slider-group">
-            <label>Nível de Detalhe (1 = Conciso, 5 = Exaustivo): <span id="valDetail">3</span></label>
-            <input type="range" id="sliderDetail" min="1" max="5" value="3">
-          </div>
-        </div>
+        </section>
 
-        <div class="settings-section">
-          <h4>Backup do banco de dados</h4>
-          <p class="hint">Cria uma cópia consistente em <code>data/backups</code>. Restaurar substitui os dados atuais e cria um backup de segurança antes.</p>
+        <!-- Perfis -->
+        <section class="settings-section" data-section="profiles">
+          <h2>Perfis da assistente</h2>
+          <p class="section-lead">Cada perfil é uma personalidade completa. O perfil padrão abre em novas conversas; você troca de perfil pela caixa de mensagem.</p>
+          <div class="profiles-layout">
+            <div class="profile-list" id="profileList"></div>
+            <div class="profile-editor">
+              <input type="hidden" id="profileId">
+              <div class="field-row">
+                <div class="field field-avatar">
+                  <label for="profileAvatar">Avatar</label>
+                  <input type="text" id="profileAvatar" maxlength="4" placeholder="V">
+                </div>
+                <div class="field grow">
+                  <label for="settingName">Nome</label>
+                  <input type="text" id="settingName" maxlength="60">
+                </div>
+              </div>
+              <div class="field">
+                <label for="profileDescription">Descrição curta</label>
+                <input type="text" id="profileDescription" maxlength="200" placeholder="Aparece no seletor de perfis">
+              </div>
+              <div class="field">
+                <label for="settingInstructions">Instruções de personalidade</label>
+                <textarea id="settingInstructions" rows="8"></textarea>
+              </div>
+              <div class="field">
+                <label for="settingTone">Tom de voz</label>
+                <input type="text" id="settingTone" list="tonePresets" maxlength="60" placeholder="Ex.: sarcástica e brilhante">
+                <datalist id="tonePresets">
+                  <option value="prestativo e empático">
+                  <option value="técnico e preciso">
+                  <option value="direto e minimalista">
+                  <option value="didático e paciente">
+                  <option value="sarcástica e brilhante">
+                  <option value="caloroso e bem-humorado">
+                </datalist>
+              </div>
+              <div class="sliders-grid">
+                <div class="slider-group">
+                  <label for="sliderFormality">Formalidade <output id="valFormality">3</output></label>
+                  <input type="range" id="sliderFormality" min="1" max="5" value="3">
+                  <div class="slider-ends"><span>Informal</span><span>Muito formal</span></div>
+                </div>
+                <div class="slider-group">
+                  <label for="sliderObjectivity">Objetividade <output id="valObjectivity">4</output></label>
+                  <input type="range" id="sliderObjectivity" min="1" max="5" value="4">
+                  <div class="slider-ends"><span>Conversadora</span><span>Direta</span></div>
+                </div>
+                <div class="slider-group">
+                  <label for="sliderDetail">Detalhe <output id="valDetail">3</output></label>
+                  <input type="range" id="sliderDetail" min="1" max="5" value="3">
+                  <div class="slider-ends"><span>Conciso</span><span>Exaustivo</span></div>
+                </div>
+              </div>
+              <div class="field">
+                <label>Emojis</label>
+                <div class="segmented" id="emojiLevel">
+                  <button type="button" data-value="1">Nenhum</button>
+                  <button type="button" data-value="2">Moderado</button>
+                  <button type="button" data-value="3">Frequente</button>
+                </div>
+              </div>
+              <div class="editor-actions">
+                <button class="btn btn-ghost danger" id="btnDeleteProfile"><svg class="ic"><use href="#i-trash"/></svg>Excluir</button>
+                <button class="btn btn-ghost" id="btnDuplicateProfile"><svg class="ic"><use href="#i-duplicate"/></svg>Duplicar</button>
+                <button class="btn btn-ghost" id="btnResetProfile" hidden title="Recarrega no editor os textos originais deste perfil. Nada muda até você salvar."><svg class="ic"><use href="#i-sparkle"/></svg>Restaurar original</button>
+                <span class="editor-primary">
+                  <button class="btn btn-secondary" id="btnMakeDefaultProfile"><svg class="ic"><use href="#i-star"/></svg>Tornar padrão</button>
+                  <button class="btn btn-primary" id="btnSavePersonality">Salvar perfil</button>
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Modelo -->
+        <section class="settings-section" data-section="model">
+          <h2>Modelo e respostas</h2>
+          <p class="section-lead">Valores usados a partir da próxima mensagem.</p>
+          <div class="field">
+            <label for="settingModel">Modelo local (Ollama)</label>
+            <select id="settingModel"></select>
+            <small class="hint" id="modelHint"></small>
+          </div>
+          <div class="field">
+            <label for="prefClaudeModel">Modelo do Claude Code</label>
+            <input type="text" id="prefClaudeModel" data-pref="claude_code_model" list="claudeModels" placeholder="Padrão do Claude Code">
+            <datalist id="claudeModels">
+              <option value="opus"><option value="sonnet"><option value="haiku">
+            </datalist>
+            <small class="hint">Vazio usa o padrão da sua conta. Aceita aliases (opus, sonnet, haiku) ou um ID completo.</small>
+          </div>
+          <div class="slider-group wide">
+            <label for="prefTemperature">Criatividade (temperatura) <output id="valTemperature">0.7</output></label>
+            <input type="range" id="prefTemperature" min="0" max="2" step="0.05" data-pref="temperature">
+            <div class="slider-ends"><span>Previsível</span><span>Criativa</span></div>
+          </div>
+          <div class="field-row">
+            <div class="field grow">
+              <label for="prefMaxTokens">Tamanho máximo da resposta (tokens)</label>
+              <input type="number" id="prefMaxTokens" min="256" max="16384" step="256" data-pref="max_output_tokens">
+            </div>
+            <div class="field grow">
+              <label for="prefHistory">Mensagens de histórico enviadas</label>
+              <input type="number" id="prefHistory" min="2" max="100" data-pref="max_history_messages">
+            </div>
+          </div>
+          <small class="hint">Temperatura, tamanho e histórico valem para os modos locais.</small>
+          <div class="toggle-row">
+            <div><strong>Consultar a biblioteca de documentos</strong><small>Busca trechos dos seus documentos para responder com citação de página.</small></div>
+            <input type="checkbox" class="switch" data-pref="enable_rag">
+          </div>
+          <div class="toggle-row">
+            <div><strong>Mostrar raciocínio do modelo</strong><small>Exibe o pensamento interno, recolhido, acima da resposta.</small></div>
+            <input type="checkbox" class="switch" data-pref="show_reasoning">
+          </div>
+          <div class="toggle-row">
+            <div><strong>Mostrar uso de ferramentas</strong><small>Lista as ferramentas que a assistente usou em cada resposta.</small></div>
+            <input type="checkbox" class="switch" data-pref="show_tool_events">
+          </div>
+        </section>
+
+        <!-- Aparência -->
+        <section class="settings-section" data-section="appearance">
+          <h2>Aparência</h2>
+          <p class="section-lead">As mudanças aparecem na hora.</p>
+          <div class="field">
+            <label>Tema</label>
+            <div class="segmented" data-pref-group="theme">
+              <button type="button" data-value="light">Claro</button>
+              <button type="button" data-value="dark">Escuro</button>
+              <button type="button" data-value="system">Sistema</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Cor de destaque</label>
+            <div class="swatches" data-pref-group="accent">
+              <button type="button" data-value="terracota" title="Terracota" style="--sw:#d97757"></button>
+              <button type="button" data-value="ambar" title="Âmbar" style="--sw:#d4a23f"></button>
+              <button type="button" data-value="verde" title="Verde" style="--sw:#4f9f78"></button>
+              <button type="button" data-value="azul" title="Azul" style="--sw:#5b8def"></button>
+              <button type="button" data-value="violeta" title="Violeta" style="--sw:#9a7cf0"></button>
+              <button type="button" data-value="rosa" title="Rosa" style="--sw:#df6f99"></button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Tamanho do texto</label>
+            <div class="segmented" data-pref-group="font_size">
+              <button type="button" data-value="small">Pequeno</button>
+              <button type="button" data-value="medium">Médio</button>
+              <button type="button" data-value="large">Grande</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Largura da conversa</label>
+            <div class="segmented" data-pref-group="chat_width">
+              <button type="button" data-value="narrow">Estreita</button>
+              <button type="button" data-value="normal">Normal</button>
+              <button type="button" data-value="wide">Larga</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Fonte das respostas</label>
+            <div class="segmented" data-pref-group="response_font">
+              <button type="button" data-value="sans">Sem serifa</button>
+              <button type="button" data-value="serif">Serifada</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Voz -->
+        <section class="settings-section" data-section="voice">
+          <h2>Voz</h2>
+          <p class="section-lead">Fala e ditado rodam no seu computador.</p>
+          <div class="status-card" id="voiceStatus">Verificando voz…</div>
+          <div class="toggle-row">
+            <div><strong>Ler as respostas em voz alta</strong><small>Fala cada resposta assim que ela termina.</small></div>
+            <input type="checkbox" class="switch" data-pref="tts_speak_responses">
+          </div>
+        </section>
+
+        <!-- Dados -->
+        <section class="settings-section" data-section="data">
+          <h2>Dados e backup</h2>
+          <p class="section-lead">Cópias consistentes do banco ficam em <code>data/backups</code>. Restaurar substitui os dados atuais e cria um backup de segurança antes.</p>
           <div class="backup-actions">
-            <button class="btn btn-sm btn-secondary" id="btnCreateBackup">Criar backup agora</button>
+            <button class="btn btn-secondary" id="btnCreateBackup"><svg class="ic"><use href="#i-plus"/></svg>Criar backup agora</button>
             <span class="hint" id="backupStatus"></span>
           </div>
           <div id="backupList" class="backup-list"></div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" data-close="settingsModal">Cancelar</button>
-        <button class="btn btn-primary" id="btnSavePersonality">Salvar Alterações</button>
+        </section>
+
+        <!-- Sobre -->
+        <section class="settings-section" data-section="about">
+          <h2>Sobre e atalhos</h2>
+          <div class="status-card" id="runtimeInfo">—</div>
+          <h4>Atalhos de teclado</h4>
+          <dl class="shortcuts">
+            <dt><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>O</kbd></dt><dd>Nova conversa</dd>
+            <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Buscar conversas</dd>
+            <dt><kbd>Ctrl</kbd> <kbd>B</kbd></dt><dd>Mostrar ou esconder a barra lateral</dd>
+            <dt><kbd>Ctrl</kbd> <kbd>,</kbd></dt><dd>Abrir configurações</dd>
+            <dt><kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>Quebra de linha na mensagem</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Fechar janelas e menus</dd>
+          </dl>
+        </section>
       </div>
     </div>
   </div>
 
   <!-- Project Modal -->
-  <div class="modal-backdrop" id="projectModal" style="display: none;">
+  <div class="modal-backdrop" id="projectModal" hidden>
     <div class="modal">
       <div class="modal-header">
-        <h3 id="projectModalTitle">Novo Projeto</h3>
-        <button class="btn-close" data-close="projectModal">✕</button>
+        <h3 id="projectModalTitle">Novo projeto</h3>
+        <button class="icon-btn" data-close="projectModal" aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button>
       </div>
       <div class="modal-body">
         <input type="hidden" id="projectId">
-        <div class="form-group">
-          <label>Nome do projeto</label>
+        <div class="field">
+          <label for="projectName">Nome do projeto</label>
           <input type="text" id="projectName" maxlength="120" placeholder="Ex.: Finanças pessoais">
         </div>
-        <div class="form-group">
-          <label>Descrição</label>
+        <div class="field">
+          <label for="projectDescription">Descrição</label>
           <textarea id="projectDescription" rows="2" placeholder="Objetivo do projeto"></textarea>
         </div>
-        <div class="form-group">
-          <label>Instruções do projeto</label>
-          <textarea id="projectInstructions" rows="4" placeholder="Como o assistente deve agir neste projeto"></textarea>
+        <div class="field">
+          <label for="projectInstructions">Instruções do projeto</label>
+          <textarea id="projectInstructions" rows="4" placeholder="Como a assistente deve agir neste projeto"></textarea>
         </div>
-        <p class="hint">Cada projeto tem conversas, memórias e documentos isolados. Excluir um projeto remove esses dados vinculados.</p>
+        <p class="hint">Cada projeto tem conversas, memórias e documentos separados. Excluir um projeto remove as memórias e os documentos dele.</p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-close="projectModal">Cancelar</button>
-        <button class="btn btn-primary" id="btnSaveProject">Salvar Projeto</button>
+        <button class="btn btn-primary" id="btnSaveProject">Salvar projeto</button>
       </div>
     </div>
   </div>
 
   <!-- Memory Modal -->
-  <div class="modal-backdrop" id="memoryModal" style="display: none;">
+  <div class="modal-backdrop" id="memoryModal" hidden>
     <div class="modal">
       <div class="modal-header">
-        <h3 id="memoryModalTitle">Nova Memória</h3>
-        <button class="btn-close" data-close="memoryModal">✕</button>
+        <h3 id="memoryModalTitle">Nova memória</h3>
+        <button class="icon-btn" data-close="memoryModal" aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button>
       </div>
       <div class="modal-body">
         <input type="hidden" id="memoryId">
-        <div class="form-group">
-          <label>Categoria</label>
+        <div class="field">
+          <label for="memoryCategory">Categoria</label>
           <select id="memoryCategory">
             <option value="preference">Preferência</option>
             <option value="fact">Fato</option>
@@ -273,12 +519,13 @@
             <option value="instruction">Instrução</option>
           </select>
         </div>
-        <div class="form-group">
-          <label>Conteúdo (salvo somente com sua ação explícita)</label>
+        <div class="field">
+          <label for="memoryContent">Conteúdo</label>
           <textarea id="memoryContent" rows="4" maxlength="4000" placeholder="Ex.: Prefiro respostas curtas em português."></textarea>
+          <small class="hint">Memórias só são salvas quando você as cria aqui.</small>
         </div>
-        <div class="form-group">
-          <label>Escopo</label>
+        <div class="field">
+          <label for="memoryProject">Escopo</label>
           <select id="memoryProject">
             <option value="">Global (todos os projetos)</option>
           </select>
@@ -286,22 +533,22 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-close="memoryModal">Cancelar</button>
-        <button class="btn btn-primary" id="btnSaveMemory">Salvar Memória</button>
+        <button class="btn btn-primary" id="btnSaveMemory">Salvar memória</button>
       </div>
     </div>
   </div>
 
   <!-- Library Modal -->
-  <div class="modal-backdrop" id="libraryModal" style="display: none;">
+  <div class="modal-backdrop" id="libraryModal" hidden>
     <div class="modal">
       <div class="modal-header">
-        <h3>Biblioteca de Documentos</h3>
-        <button class="btn-close" data-close="libraryModal">✕</button>
+        <h3>Biblioteca de documentos</h3>
+        <button class="icon-btn" data-close="libraryModal" aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button>
       </div>
       <div class="modal-body">
-        <p class="hint">PDFs digitalizados (imagem) não têm texto extraível e precisam de OCR, não incluído nesta versão. As respostas citam documento e página quando há evidência.</p>
+        <p class="hint">As respostas citam documento e página quando encontram evidência. PDFs digitalizados precisam de OCR (Tesseract) para ter texto.</p>
         <div class="backup-actions">
-          <button class="btn btn-sm btn-primary" id="btnModalUploadDoc">+ Importar PDF/TXT/MD</button>
+          <button class="btn btn-primary btn-sm" id="btnModalUploadDoc"><svg class="ic"><use href="#i-plus"/></svg>Importar PDF, TXT ou MD</button>
         </div>
         <div id="libraryModalList" class="documents-list"></div>
       </div>

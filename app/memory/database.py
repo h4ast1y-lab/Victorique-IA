@@ -24,6 +24,9 @@ COLUMN_MIGRATIONS = [
     ("messages", "tool_trace_json", "TEXT"),
     # Claude Code session resumed by each conversation in claude-code mode.
     ("conversations", "claude_session_id", "TEXT"),
+    # Profile customization: avatar (emoji or initials) and emoji usage 1-3.
+    ("personalities", "avatar", "TEXT"),
+    ("personalities", "emoji_level", "INTEGER DEFAULT 2"),
 ]
 
 

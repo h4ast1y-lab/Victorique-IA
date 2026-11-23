@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import List, Dict, Any, Optional
 from app.config import settings
 from app.core.personality import personality_manager
@@ -7,6 +8,8 @@ from app.memory.project_store import project_store
 from app.rag.vector_store import vector_store
 from app.tools.registry import tool_registry
 
+
+logger = logging.getLogger(__name__)
 
 TOOL_TRACE_NOTE_CHARS = 2000
 
@@ -72,12 +75,16 @@ class ContextBuilder:
         # 4. RAG Document Retrieval
         sources = []
         if enable_rag and user_query.strip():
-            relevant_chunks = await vector_store.search(
-                query=user_query,
-                project_id=project_id,
-                top_k=3,
-                min_score=0.40
-            )
+            try:
+                relevant_chunks = await vector_store.search(
+                    query=user_query,
+                    project_id=project_id,
+                    top_k=3,
+                    min_score=0.40
+                )
+            except Exception as exc:  # embeddings come from Ollama, which may be off
+                logger.warning("Busca nos documentos indisponível: %s", exc)
+                relevant_chunks = []
             if relevant_chunks:
                 rag_lines = ["\nINFORMAÇÕES RECUPERADAS DOS SEUS DOCUMENTOS:"]
                 seen = set()

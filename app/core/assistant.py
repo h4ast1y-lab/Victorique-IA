@@ -397,6 +397,7 @@ class AssistantEngine:
                         model=selected_model,
                         system_prompt=ctx["system_prompt"],
                         max_tokens=settings.max_output_tokens,
+                        temperature=settings.temperature,
                         tools=tool_schemas if tools_enabled else None,
                     ):
                         if isinstance(token, ReasoningDelta):
@@ -431,6 +432,7 @@ class AssistantEngine:
                             model=selected_model,
                             system_prompt=ctx["system_prompt"],
                             max_tokens=settings.max_output_tokens,
+                            temperature=settings.temperature,
                             tools=None,
                         ):
                             if isinstance(token, ReasoningDelta):

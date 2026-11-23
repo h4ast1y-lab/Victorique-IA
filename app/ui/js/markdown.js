@@ -63,6 +63,10 @@
     return text;
   }
 
+  function splitRow(row) {
+    return row.replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); });
+  }
+
   function renderMarkdown(source) {
     var text = String(source == null ? '' : source).replace(/\r\n/g, '\n');
     var blocks = [];
@@ -119,6 +123,30 @@
       if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
         closeAll();
         html.push('<hr>');
+        continue;
+      }
+
+      // Tables: a header row, a |---|:---:| separator, then body rows.
+      var next = (lines[i + 1] || '').trim();
+      if (/^\|.*\|$/.test(trimmed) && /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(next)) {
+        closeAll();
+        var aligns = splitRow(next).map(function (c) {
+          return /^:-+:$/.test(c) ? 'center' : /-:$/.test(c) ? 'right' : '';
+        });
+        var cell = function (tag, c, k) {
+          var a = aligns[k] ? ' style="text-align:' + aligns[k] + '"' : '';
+          return '<' + tag + a + '>' + inline(c) + '</' + tag + '>';
+        };
+        var table = '<table><thead><tr>' +
+          splitRow(trimmed).map(function (c, k) { return cell('th', c, k); }).join('') +
+          '</tr></thead><tbody>';
+        i += 2;
+        while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) {
+          table += '<tr>' + splitRow(lines[i].trim()).map(function (c, k) { return cell('td', c, k); }).join('') + '</tr>';
+          i++;
+        }
+        i--;
+        html.push(table + '</tbody></table>');
         continue;
       }
 
