@@ -22,6 +22,8 @@ COLUMN_MIGRATIONS = [
     # Compact record of the tools used in an assistant answer, so the model
     # can still see what a tool returned in later turns.
     ("messages", "tool_trace_json", "TEXT"),
+    # Claude Code session resumed by each conversation in claude-code mode.
+    ("conversations", "claude_session_id", "TEXT"),
 ]
 
 

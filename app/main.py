@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.config import settings, DOCS_DIR, BASE_DIR
+from app.config import settings, DOCS_DIR, BASE_DIR, VALID_BACKENDS
 from app.memory.database import init_db, get_connection
 from app.memory.conversation_store import conversation_store
 from app.memory.memory_store import memory_store
@@ -31,12 +31,6 @@ from app.voice import tts_engine, stt_engine
 # Initialize database schema on startup
 init_db()
 
-# Auto-start do servidor llama.cpp em segundo plano: o modelo pode levar
-# minutos para carregar e a API precisa responder enquanto isso.
-if settings.llama_cpp_auto_start and settings.default_backend in ("llama-cpp", "llama-cpp-server"):
-    llama_cpp_server.start_in_background(wait_seconds=180)
-# Encerra o llama-server iniciado por este app ao sair (libera a VRAM).
-atexit.register(llama_cpp_server.stop)
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
@@ -162,6 +156,7 @@ class BackupRestoreRequest(BaseModel):
 
 class SettingsUpdate(BaseModel):
     default_model: Optional[str] = None
+    default_backend: Optional[str] = None
 
 
 class TTSSpeakRequest(BaseModel):
@@ -204,6 +199,25 @@ def _current_model() -> str:
     return _get_setting("default_model", settings.default_model) or settings.default_model
 
 
+def _current_backend() -> str:
+    """Mode saved from the UI (settings table), else the env/config default."""
+    value = (_get_setting("default_backend", settings.default_backend) or "").strip().lower()
+    return value if value in VALID_BACKENDS else settings.default_backend
+
+
+# Auto-start do servidor llama.cpp em segundo plano, só quando o modo salvo é
+# local: o modelo pode levar minutos para carregar e a API responde enquanto isso.
+if settings.llama_cpp_auto_start and _current_backend() in ("llama-cpp", "llama-cpp-server"):
+    llama_cpp_server.start_in_background(wait_seconds=180)
+# Encerra o llama-server iniciado por este app ao sair (libera a VRAM).
+atexit.register(llama_cpp_server.stop)
+
+
+def _claude_sdk_installed() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("claude_agent_sdk") is not None
+
+
 # ----------------- System & Health -----------------
 @app.get("/api/ping")
 async def ping():
@@ -218,9 +232,11 @@ async def health_check():
     models = await ollama_client.list_models() if ollama_ok else []
     names = [m.get("name", "") for m in models]
     active = _current_model()
-    backend = (settings.default_backend or "ollama").strip().lower()
+    backend = _current_backend()
     if backend in ("llama-cpp", "llama-cpp-server"):
         backend_ok = llama_cpp_server.available or llama_cpp_client.available
+    elif backend == "claude-code":
+        backend_ok = _claude_sdk_installed()
     else:
         backend_ok = ollama_ok
     return {
@@ -250,6 +266,8 @@ async def list_models():
 async def get_settings():
     return {
         "default_model": _current_model(),
+        "default_backend": _current_backend(),
+        "available_backends": list(VALID_BACKENDS),
         "max_context_tokens": settings.max_context_tokens,
         "max_output_tokens": settings.max_output_tokens,
         "authorization_ttl_seconds": settings.authorization_ttl_seconds,
@@ -263,7 +281,39 @@ async def update_settings(req: SettingsUpdate):
             raise HTTPException(status_code=400, detail="Nome de modelo inválido.")
         _set_setting("default_model", name)
         settings.default_model = name
-    return {"status": "updated", "default_model": _current_model()}
+    if req.default_backend is not None:
+        backend = req.default_backend.strip().lower()
+        if backend not in VALID_BACKENDS:
+            raise HTTPException(status_code=400, detail="Modo inválido.")
+        _set_setting("default_backend", backend)
+    return {
+        "status": "updated",
+        "default_model": _current_model(),
+        "default_backend": _current_backend(),
+    }
+
+
+@app.get("/api/claude-code/status")
+async def claude_code_status():
+    installed = _claude_sdk_installed()
+    cli_path = None
+    last_error = None
+    if installed:
+        import claude_agent_sdk
+        bundled = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude.exe"
+        cli_path = str(bundled) if bundled.is_file() else None
+        try:  # filled by the Claude Code backend once it exists and has run
+            from app.claude_code.backend import claude_code_backend
+            last_error = claude_code_backend.last_error
+        except ImportError:
+            last_error = None
+    return {
+        "sdk_installed": installed,
+        "cli_path": cli_path,
+        "workspace": settings.claude_code_workspace,
+        "model": settings.claude_code_model,
+        "last_error": last_error,
+    }
 
 
 # ----------------- Voz (TTS / STT) -----------------
@@ -435,7 +485,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         )
 
     async def event_generator():
-        backend = req.backend or settings.default_backend
+        backend = req.backend or _current_backend()
         agen = assistant_engine.chat_stream(
             conversation_id=conv["id"],
             user_message=req.message,

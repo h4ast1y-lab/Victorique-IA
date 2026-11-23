@@ -56,6 +56,21 @@ class ConversationStore:
             cur = conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
             return cur.rowcount > 0
 
+    def get_claude_session(self, conversation_id: str) -> Optional[str]:
+        """Claude Code session id this conversation resumes (claude-code mode)."""
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT claude_session_id FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+            return row["claude_session_id"] if row else None
+
+    def set_claude_session(self, conversation_id: str, session_id: Optional[str]) -> None:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE conversations SET claude_session_id = ? WHERE id = ?",
+                (session_id, conversation_id),
+            )
+
     def add_message(
         self,
         conversation_id: str,

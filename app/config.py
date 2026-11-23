@@ -147,6 +147,13 @@ class Settings(BaseModel):
     default_backend: str = os.environ.get(
         "ASSISTANT_DEFAULT_BACKEND", "llama-cpp"
     )
+    # ----------------- Claude Code (Claude Agent SDK) -----------------
+    # Pasta de trabalho do Claude Code (cwd das sessões).
+    claude_code_workspace: str = os.environ.get(
+        "ASSISTANT_CLAUDE_WORKSPACE", str(Path.home() / "Documents")
+    )
+    # Modelo do Claude Code; vazio = padrão do Claude Code.
+    claude_code_model: str = os.environ.get("ASSISTANT_CLAUDE_MODEL", "")
     # Se True, inicia o llama-server automaticamente ao subir o app.
     llama_cpp_auto_start: bool = os.environ.get(
         "ASSISTANT_LLAMA_CPP_AUTO_START", "1"
@@ -163,5 +170,8 @@ class Settings(BaseModel):
         ],
     )
 
+
+# Backends accepted by the chat API and the mode selector.
+VALID_BACKENDS = ("llama-cpp", "llama-cpp-server", "ollama", "claude-code")
 
 settings = Settings()

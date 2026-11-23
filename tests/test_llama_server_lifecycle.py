@@ -103,9 +103,13 @@ def test_health_reports_active_backend(client, monkeypatch):
         return False
 
     monkeypatch.setattr(ollama_client, "is_alive", offline)
-    monkeypatch.setattr(settings, "default_backend", "llama-cpp")
     monkeypatch.setattr(llama_cpp_server, "_available", True)
-    body = client.get("/api/health").json()
+    before = client.get("/api/settings").json()["default_backend"]
+    client.post("/api/settings", json={"default_backend": "llama-cpp"})
+    try:
+        body = client.get("/api/health").json()
+    finally:
+        client.post("/api/settings", json={"default_backend": before})
     assert body["active_backend"] == "llama-cpp"
     assert body["status"] == "healthy"
 
