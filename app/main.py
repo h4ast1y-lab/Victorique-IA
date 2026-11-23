@@ -755,6 +755,9 @@ async def get_pending_authorizations():
 @app.post("/api/security/authorize")
 async def authorize_action(req: AuthorizeActionRequest):
     status, action = security_manager.resolve_action_detailed(req.action_id, req.approved)
+    if status == "approved" and action and action.get("kind") == "claude_code":
+        # Claude Code runs the tool itself; resolving released its callback.
+        return {"status": "approved"}
     if status == "approved" and action:
         result = await tool_registry.execute_approved_action(action)
 

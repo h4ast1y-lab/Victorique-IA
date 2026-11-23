@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import uuid
@@ -26,6 +27,26 @@ class SecurityManager:
         # Authorizations are single-use, expire quickly and are bound to the
         # exact tool + parameters that were shown to the user.
         self.pending_actions: Dict[str, Dict[str, Any]] = {}
+        # Futures awaited by Claude Code permission callbacks, keyed by
+        # action_id, with the event loop that owns each one.
+        self._waiters: Dict[str, Tuple[asyncio.AbstractEventLoop, asyncio.Future]] = {}
+
+    def _complete_waiter(self, action_id: str, approved: bool) -> None:
+        """Wakes the Claude Code callback waiting on this action, if any.
+        Safe to call from any thread or event loop."""
+        entry = self._waiters.pop(action_id, None)
+        if not entry:
+            return
+        loop, future = entry
+
+        def _set():
+            if not future.done():
+                future.set_result(approved)
+
+        try:
+            loop.call_soon_threadsafe(_set)
+        except RuntimeError:  # loop already closed
+            pass
 
     def log_action(
         self,
@@ -53,6 +74,7 @@ class SecurityManager:
         expired = [aid for aid, a in self.pending_actions.items() if a["expires_at"] < now]
         for aid in expired:
             action = self.pending_actions.pop(aid, None)
+            self._complete_waiter(aid, False)
             if action:
                 self.log_action(
                     action_type=action["action_type"],
@@ -65,6 +87,7 @@ class SecurityManager:
         if len(self.pending_actions) > 50:
             for aid in list(self.pending_actions.keys())[: len(self.pending_actions) - 50]:
                 self.pending_actions.pop(aid, None)
+                self._complete_waiter(aid, False)
 
     def create_authorization_request(
         self,
@@ -107,6 +130,47 @@ class SecurityManager:
         )
         return action_id
 
+    def create_waiting_request(
+        self,
+        action_type: str,
+        resource: str,
+        description: str,
+        payload: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, asyncio.Future]:
+        """
+        Pending authorization for a Claude Code tool call. Instead of running
+        a registry tool on approval, it completes the returned future with
+        True (approved) or False (rejected, expired or cancelled).
+        Must be called from a running event loop.
+        """
+        loop = asyncio.get_running_loop()
+        action_id = self.create_authorization_request(
+            action_type=action_type,
+            category=ActionCategory.REQUIRES_AUTH,
+            resource=resource,
+            description=description,
+            payload=payload,
+            context=context,
+        )
+        self.pending_actions[action_id]["kind"] = "claude_code"
+        future = loop.create_future()
+        self._waiters[action_id] = (loop, future)
+        return action_id, future
+
+    def cancel_action(self, action_id: str, reason: str) -> None:
+        """Drops a pending action without user decision (timeout, stop)."""
+        action = self.pending_actions.pop(action_id, None)
+        self._complete_waiter(action_id, False)
+        if action:
+            self.log_action(
+                action_type=action["action_type"],
+                category=ActionCategory(action["category"]),
+                resource=action["resource"],
+                authorized=False,
+                details=reason,
+            )
+
     def get_pending_action(self, action_id: str) -> Optional[Dict[str, Any]]:
         self._purge_expired()
         return self.pending_actions.get(action_id)
@@ -132,6 +196,7 @@ class SecurityManager:
         self._purge_expired()
         action = self.pending_actions.pop(action_id, None)
         if not action:
+            self._complete_waiter(action_id, False)
             return "not_found", None
 
         now = datetime.now(timezone.utc).timestamp()
@@ -143,6 +208,7 @@ class SecurityManager:
                 authorized=False,
                 details="Authorization expired",
             )
+            self._complete_waiter(action_id, False)
             return "expired", None
 
         if not approved:
@@ -153,6 +219,7 @@ class SecurityManager:
                 authorized=False,
                 details="User rejected the action",
             )
+            self._complete_waiter(action_id, False)
             return "rejected", None
 
         if _payload_hash(action["payload"]) != action["payload_hash"]:
@@ -163,6 +230,7 @@ class SecurityManager:
                 authorized=False,
                 details="Payload mismatch; action blocked",
             )
+            self._complete_waiter(action_id, False)
             return "tampered", None
 
         self.log_action(
@@ -172,6 +240,7 @@ class SecurityManager:
             authorized=True,
             details="User approved the action (single use)",
         )
+        self._complete_waiter(action_id, True)
         return "approved", action
 
     def resolve_action(self, action_id: str, approved: bool) -> Optional[Dict[str, Any]]:
