@@ -109,6 +109,7 @@ class _Turn:
         self.error: Optional[str] = None
         self.got_output = False
         self.delta_since_message = False
+        self.separate = False
         self.client: Any = None
         self.cancelled = False
 
@@ -119,7 +120,15 @@ class _Turn:
         self.got_output = True
         self.emit(payload)
 
+    def _start_text_block(self) -> None:
+        """A new text block after earlier text (e.g. after a tool) starts a new paragraph."""
+        self.separate = bool(self.parts)
+
     def _add_text(self, text: str) -> None:
+        if self.separate:
+            self.separate = False
+            if not self.text().endswith("\n"):
+                text = "\n\n" + text.lstrip("\n")
         self.parts.append(text)
         self._out({"type": "token", "content": text})
 
@@ -140,6 +149,10 @@ class _Turn:
         if message.parent_tool_use_id:  # subagent output stays out of the answer
             return
         event = message.event or {}
+        if event.get("type") == "content_block_start":
+            if (event.get("content_block") or {}).get("type") == "text":
+                self._start_text_block()
+            return
         if event.get("type") != "content_block_delta":
             return
         delta = event.get("delta") or {}
@@ -164,6 +177,7 @@ class _Turn:
                 and block.text
             ):
                 # Partial messages missing: the full block is the only source.
+                self._start_text_block()
                 self._add_text(block.text)
         self.delta_since_message = False
 

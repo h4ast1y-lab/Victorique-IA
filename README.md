@@ -443,8 +443,10 @@ com o comando acima.
 ### Permissões
 
 - Leituras dentro da pasta de trabalho e das pastas autorizadas rodam sem perguntar.
-- Escritas, edições, comandos e acesso à internet aparecem na **barra de autorização**
-  com a ferramenta e o alvo. Recusar, ou deixar expirar (120 s), nega a ação.
+- Escritas, edições, comandos que alteram algo e acesso à internet aparecem na
+  **barra de autorização** com a ferramenta e o alvo. Recusar, ou deixar expirar
+  (120 s), nega a ação. Comandos que o Claude Code classifica como só leitura (por
+  exemplo `ls` na pasta de trabalho) rodam sem perguntar.
 - Escrever no código do app, no banco ou nos backups é **negado sem perguntar**.
 - **Modo turbo** (`ASSISTANT_TURBO_MODE=1`): escritas e edições são aprovadas
   automaticamente (como o `acceptEdits` do Claude Code), mas comandos e internet
@@ -469,6 +471,12 @@ pastas protegidas do app.
 - Verificado no app real em 23/11/2026: seletor e selo funcionando; uma mensagem no
   modo Claude Code chega ao `claude.exe` do pacote e, com o login expirado, mostra a
   ajuda de login em 2,7 s.
-- **Pendente:** o teste real com login válido (conversa, leitura, escrita aprovada e
-  recusada pela barra).
+- Teste real com login válido em 23/11/2026 (app com dados à parte, Claude Opus 5.5):
+  | Pedido | Resultado |
+  |---|---|
+  | "Oi, quem é você?" | Resposta no tom da Victorique, 8 s |
+  | Listar a pasta Documentos | `ls` rodou sem pedir autorização, 10 s |
+  | Criar `victorique_teste.txt`, aprovando na barra | Pedido `Write` na barra; aprovado; arquivo criado |
+  | Criar `victorique_teste2.txt`, recusando | Negado; nada criado; a Victorique explicou e não tentou de novo |
+  O arquivo de teste foi apagado depois.
 

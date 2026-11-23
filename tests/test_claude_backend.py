@@ -248,3 +248,27 @@ def test_add_dirs_exclude_protected_paths():
     dirs = {str(d) for d in opts.add_dirs}
     assert str(BASE_DIR.resolve()) not in dirs
     assert str(DATA_DIR.resolve()) not in dirs
+
+
+def block_start(kind="text"):
+    return StreamEvent(
+        uuid="u", session_id="s",
+        event={"type": "content_block_start", "index": 0, "content_block": {"type": kind}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_text_blocks_after_a_tool_are_separated():
+    """Live run showed 'Vou criá-lo agora.Pronto.' when text resumed after a tool."""
+    h = Harness([
+        block_start(), delta("text_delta", "Vou criar."),
+        AssistantMessage(content=[TextBlock(text="Vou criar.")], model="m"),
+        AssistantMessage(content=[ToolUseBlock(id="t1", name="Write", input={})], model="m"),
+        UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="ok", is_error=False)]),
+        block_start(), delta("text_delta", "Pronto."),
+        result(),
+    ])
+    events = await collect(ClaudeCodeBackend(h.factory).run_turn(_conv(), "x", None, None))
+    assert events[-1]["content"] == "Vou criar.\n\nPronto."
+    tokens = "".join(e["content"] for e in events if e["type"] == "token")
+    assert tokens == "Vou criar.\n\nPronto."
