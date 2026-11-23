@@ -598,7 +598,7 @@ async function sendMessage() {
             `🔐 Autorização necessária: ${data.tool_name || data.tool || 'ação'} — ${data.resource || ''}`,
             'tool-event-auth'
           );
-          checkPendingAuthorizations();
+          checkPendingAuthorizations(true);
         } else if (data.type === 'reasoning') {
           // Model's internal reasoning: shown collapsed, never part of the answer.
           if (!reasoningBody) {
@@ -713,8 +713,10 @@ function scrollToBottom() {
 }
 
 // ----------------- Security Authorizations -----------------
-async function checkPendingAuthorizations() {
-  if (isGenerating) return;
+// force: show the bar even mid-stream. Claude Code waits for the answer inside
+// the turn, while the local engine ends its turn before asking.
+async function checkPendingAuthorizations(force = false) {
+  if (isGenerating && !force) return;
   try {
     const pending = await api('/api/security/pending');
     if (pending.length > 0) {
@@ -724,8 +726,8 @@ async function checkPendingAuthorizations() {
       authPayload.textContent = JSON.stringify(act.payload || {}, null, 2).slice(0, 3000);
       authBar.style.display = 'flex';
 
-      btnApproveAction.onclick = () => resolveAuth(act.id, true);
-      btnRejectAction.onclick = () => resolveAuth(act.id, false);
+      btnApproveAction.onclick = () => resolveAuth(act.id, true, act.kind);
+      btnRejectAction.onclick = () => resolveAuth(act.id, false, act.kind);
     } else {
       authBar.style.display = 'none';
     }
@@ -734,14 +736,16 @@ async function checkPendingAuthorizations() {
   }
 }
 
-async function resolveAuth(actionId, approved) {
+async function resolveAuth(actionId, approved, kind) {
   try {
     const data = await api('/api/security/authorize', {
       method: 'POST',
       body: { action_id: actionId, approved }
     });
     authBar.style.display = 'none';
-    if (data.status === 'executed') {
+    if (kind === 'claude_code') {
+      // Claude Code runs (or skips) the tool itself; the open stream shows it.
+    } else if (data.status === 'executed') {
       renderToolResult(data.result);
     } else {
       renderMessage('assistant', `Ação **${approved ? 'não executada' : 'recusada'}**: ${data.status}`);
@@ -750,7 +754,7 @@ async function resolveAuth(actionId, approved) {
     authBar.style.display = 'none';
     renderMessage('assistant', `Falha ao resolver autorização: ${err.message}`);
   }
-  checkPendingAuthorizations();
+  checkPendingAuthorizations(kind === 'claude_code');
 }
 
 function renderToolResult(result) {

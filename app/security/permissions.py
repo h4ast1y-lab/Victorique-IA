@@ -179,7 +179,7 @@ class SecurityManager:
         self._purge_expired()
         public_fields = (
             "id", "action_type", "category", "resource", "description",
-            "payload", "timestamp", "expires_at", "expires_at_iso",
+            "payload", "timestamp", "expires_at", "expires_at_iso", "kind",
         )
         return [
             {k: a.get(k) for k in public_fields}

@@ -42,3 +42,32 @@ def test_ui_has_mode_selector_and_badge():
     assert 'value="claude-code"' in html
     assert 'id="claudeBadge"' in html
     assert "default_backend" in js
+
+
+def test_auth_bar_shows_during_claude_turn():
+    """Claude waits for approval mid-stream, so the bar must open while generating."""
+    js = (UI / "js" / "app.js").read_text(encoding="utf-8")
+    handler = js.split("data.type === 'authorization_required'", 1)[1].split("} else if", 1)[0]
+    assert "checkPendingAuthorizations(true)" in handler
+    assert "if (isGenerating && !force) return;" in js
+
+
+def test_resolving_claude_request_adds_no_misleading_bubble():
+    js = (UI / "js" / "app.js").read_text(encoding="utf-8")
+    resolve = js.split("async function resolveAuth", 1)[1].split("\nfunction ", 1)[0]
+    assert "kind === 'claude_code'" in resolve
+
+
+def test_pending_list_exposes_kind():
+    import asyncio
+    from app.security.permissions import security_manager
+
+    async def create():
+        return security_manager.create_waiting_request(
+            action_type="Write", resource="C:/k.txt", description="t", payload={}
+        )
+
+    action_id, _ = asyncio.run(create())
+    item = next(a for a in security_manager.list_pending_actions() if a["id"] == action_id)
+    assert item["kind"] == "claude_code"
+    security_manager.cancel_action(action_id, "teste")
