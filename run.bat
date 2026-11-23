@@ -12,7 +12,7 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-echo Iniciando Assistente Virtual Pessoal...
+echo Iniciando Victorique...
 ".venv\Scripts\python.exe" run.py %*
 
 if errorlevel 1 (

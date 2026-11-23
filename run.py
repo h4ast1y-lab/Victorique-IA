@@ -102,7 +102,7 @@ def check_configured_model():
 def main():
     configure_console()
     print("=" * 60)
-    print("  Iniciando Assistente Virtual Pessoal (Desktop)")
+    print("  Iniciando Victorique (Desktop)")
     print("=" * 60)
 
     args = set(sys.argv[1:])
@@ -151,7 +151,7 @@ def main():
         import webview
         print("Abrindo janela de desktop nativa (WebView2)...")
         webview.create_window(
-            title="Assistente Virtual Pessoal",
+            title="Victorique",
             url=app_url,
             width=1200,
             height=820,

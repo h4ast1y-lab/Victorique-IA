@@ -43,7 +43,7 @@ def _env_dirs(name: str, defaults: list) -> list:
 
 
 class Settings(BaseModel):
-    app_name: str = "Assistente Virtual Pessoal"
+    app_name: str = "Victorique"
     version: str = "1.1.0"
     host: str = "127.0.0.1"
     port: int = _env_int("ASSISTANT_PORT", 8765)

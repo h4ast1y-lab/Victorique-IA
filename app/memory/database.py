@@ -161,9 +161,40 @@ def init_db():
         )
         """)
 
+    _seed_victorique(cur)
+
     conn.commit()
     conn.close()
     logger.info("Database initialized successfully.")
+
+
+def _seed_victorique(cur: sqlite3.Cursor) -> None:
+    """
+    Creates the Victorique profile once. Only on that first insertion, and
+    only when the user has no profiles of their own, it becomes the default;
+    later runs never touch which profile is the default.
+    """
+    from app.core import victorique_persona as vp
+
+    if cur.execute("SELECT 1 FROM personalities WHERE id = ?", (vp.VICTORIQUE_ID,)).fetchone():
+        return
+    user_profiles = cur.execute(
+        "SELECT COUNT(*) FROM personalities WHERE id != 'default'"
+    ).fetchone()[0]
+    make_default = user_profiles == 0
+    if make_default:
+        cur.execute("UPDATE personalities SET is_default = 0")
+    cur.execute(
+        """
+        INSERT INTO personalities (id, name, description, system_instructions, tone,
+                                   formality, objectivity, detail_level, is_default)
+        VALUES (?, ?, ?, ?, ?, 3, 4, 3, ?)
+        """,
+        (
+            vp.VICTORIQUE_ID, vp.VICTORIQUE_NAME, vp.VICTORIQUE_DESCRIPTION,
+            vp.VICTORIQUE_INSTRUCTIONS, vp.VICTORIQUE_TONE, 1 if make_default else 0,
+        ),
+    )
 
 if __name__ == "__main__":
     init_db()

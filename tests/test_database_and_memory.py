@@ -10,7 +10,9 @@ def test_database_initialization():
     # Check default personality exists
     p = personality_manager.get_default_personality()
     assert p is not None
-    assert p["name"] == "Assistente Pessoal"
+    assert p["name"] == "Victorique"
+    # The stock profile is kept as an alternative.
+    assert personality_manager.get_personality("default")["name"] == "Assistente Pessoal"
 
 def test_conversation_crud():
     conv = conversation_store.create_conversation(title="Conversa de Teste")

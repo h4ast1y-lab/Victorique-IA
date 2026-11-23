@@ -113,8 +113,16 @@ class PersonalityManager:
             cur = conn.execute("DELETE FROM personalities WHERE id = ?", (personality_id,))
             return cur.rowcount > 0
 
-    def build_system_prompt(self, personality: Optional[Dict[str, Any]] = None) -> str:
+    def build_system_prompt(
+        self, personality: Optional[Dict[str, Any]] = None, mode: str = "local"
+    ) -> str:
+        """``mode``: "local" (llama.cpp/Ollama) or "claude-code"."""
         p = personality or self.get_default_personality()
+        mode_line = (
+            "MODO DE OPERAÇÃO: você opera pelo Claude Code; as mensagens são processadas pela Anthropic."
+            if mode == "claude-code"
+            else "MODO DE OPERAÇÃO: você roda localmente no computador do usuário."
+        )
 
         formality_map = {
             1: "Seja totalmente informal, descontraído e amigável.",
@@ -142,7 +150,8 @@ class PersonalityManager:
 
         instructions = [
             f"IDENTIDADE DO ASSISTENTE: {p.get('name', 'Assistente Pessoal')}.",
-            p.get('system_instructions', 'Você é um assistente virtual pessoal independente que roda localmente no computador do usuário.'),
+            p.get('system_instructions', 'Você é um assistente virtual pessoal independente.'),
+            mode_line,
             f"TOM: {p.get('tone', 'prestativo')}.",
             f"FORMALIDADE: {formality_map.get(p.get('formality', 3), formality_map[3])}",
             f"OBJETIVIDADE: {objectivity_map.get(p.get('objectivity', 4), objectivity_map[4])}",
