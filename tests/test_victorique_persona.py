@@ -58,3 +58,50 @@ def test_persona_keeps_work_quality_rules():
     text = personality_manager.get_personality("victorique")["system_instructions"]
     assert "tédio" in text
     assert "inventa" in text
+
+
+def test_persona_v2_has_her_voice_and_examples():
+    from app.core import victorique_persona as vp
+    text = vp.VICTORIQUE_INSTRUCTIONS
+    for marker in ("Fonte da Sabedoria", "fragmentos do caos".upper(), "cachimbo", "Hmph", "EXEMPLOS"):
+        assert marker.lower() in text.lower(), marker
+    # The voice never costs the work or honesty.
+    assert "nunca recusa" in text.lower() and "não inventa" in text.lower()
+
+
+def test_style_sliders_do_not_impose_a_polite_temperament():
+    profile = personality_manager.get_personality("victorique")
+    prompt = personality_manager.build_system_prompt(profile, mode="local")
+    assert "profissional, educado" not in prompt and "cordialidade" not in prompt
+    assert "a personalidade vence" in prompt
+
+
+def test_claude_mode_keeps_the_persona_voice():
+    profile = personality_manager.get_personality("victorique")
+    prompt = personality_manager.build_system_prompt(profile, mode="claude-code")
+    assert "VOZ NO CLAUDE CODE" in prompt and "Victorique" in prompt
+
+
+def test_unedited_legacy_profile_is_upgraded_but_edited_one_is_kept():
+    from app.core import victorique_persona as vp
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE personalities SET system_instructions = ?, tone = 'prestativo', description = '' "
+            "WHERE id = 'victorique'", (vp.LEGACY_INSTRUCTIONS[0],),
+        )
+    init_db()
+    upgraded = personality_manager.get_personality("victorique")
+    assert upgraded["system_instructions"] == vp.VICTORIQUE_INSTRUCTIONS
+    assert upgraded["tone"] == vp.VICTORIQUE_TONE and upgraded["emoji_level"] == 1
+
+    with get_connection() as conn:
+        conn.execute("UPDATE personalities SET system_instructions = 'Meu texto.' WHERE id = 'victorique'")
+    try:
+        init_db()
+        assert personality_manager.get_personality("victorique")["system_instructions"] == "Meu texto."
+    finally:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE personalities SET system_instructions = ? WHERE id = 'victorique'",
+                (vp.VICTORIQUE_INSTRUCTIONS,),
+            )

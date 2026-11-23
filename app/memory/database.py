@@ -181,7 +181,12 @@ def _seed_victorique(cur: sqlite3.Cursor) -> None:
     """
     from app.core import victorique_persona as vp
 
-    if cur.execute("SELECT 1 FROM personalities WHERE id = ?", (vp.VICTORIQUE_ID,)).fetchone():
+    row = cur.execute(
+        "SELECT system_instructions, description, tone FROM personalities WHERE id = ?",
+        (vp.VICTORIQUE_ID,),
+    ).fetchone()
+    if row:
+        _upgrade_victorique(cur, row)
         return
     user_profiles = cur.execute(
         "SELECT COUNT(*) FROM personalities WHERE id != 'default'"
@@ -189,17 +194,46 @@ def _seed_victorique(cur: sqlite3.Cursor) -> None:
     make_default = user_profiles == 0
     if make_default:
         cur.execute("UPDATE personalities SET is_default = 0")
+    style = vp.VICTORIQUE_STYLE
     cur.execute(
         """
         INSERT INTO personalities (id, name, description, system_instructions, tone,
-                                   formality, objectivity, detail_level, is_default)
-        VALUES (?, ?, ?, ?, ?, 3, 4, 3, ?)
+                                   formality, objectivity, detail_level, emoji_level, is_default)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             vp.VICTORIQUE_ID, vp.VICTORIQUE_NAME, vp.VICTORIQUE_DESCRIPTION,
-            vp.VICTORIQUE_INSTRUCTIONS, vp.VICTORIQUE_TONE, 1 if make_default else 0,
+            vp.VICTORIQUE_INSTRUCTIONS, vp.VICTORIQUE_TONE,
+            style["formality"], style["objectivity"], style["detail_level"], style["emoji_level"],
+            1 if make_default else 0,
         ),
     )
+
+
+def _upgrade_victorique(cur: sqlite3.Cursor, row: sqlite3.Row) -> None:
+    """
+    Moves an unedited Victorique profile to the current persona text. A profile
+    whose instructions the user changed is never touched.
+    """
+    from app.core import victorique_persona as vp
+
+    if row["system_instructions"] not in vp.LEGACY_INSTRUCTIONS:
+        return
+    style = vp.VICTORIQUE_STYLE
+    cur.execute(
+        """
+        UPDATE personalities SET system_instructions = ?, description = ?, tone = ?,
+               formality = ?, objectivity = ?, detail_level = ?, emoji_level = ?
+        WHERE id = ?
+        """,
+        (
+            vp.VICTORIQUE_INSTRUCTIONS, vp.VICTORIQUE_DESCRIPTION, vp.VICTORIQUE_TONE,
+            style["formality"], style["objectivity"], style["detail_level"], style["emoji_level"],
+            vp.VICTORIQUE_ID,
+        ),
+    )
+    logger.info("Perfil Victorique atualizado para a versão %s da persona.", vp.VICTORIQUE_VERSION)
+
 
 if __name__ == "__main__":
     init_db()

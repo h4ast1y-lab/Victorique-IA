@@ -54,7 +54,7 @@ def test_profile_avatar_emoji_and_set_default(client):
     try:
         assert created["avatar"] == "📝" and created["emoji_level"] == 1
         assert created["tone"] == "meticulosa"  # free text, not a fixed list
-        assert "Não use emojis." in personality_manager.build_system_prompt(created)
+        assert "Emojis: não use emojis" in personality_manager.build_system_prompt(created)
 
         assert client.post(f"/api/personalities/{created['id']}/default").status_code == 200
         assert personality_manager.get_default_personality()["id"] == created["id"]
