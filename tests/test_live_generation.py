@@ -2,6 +2,7 @@ import pytest
 from app.core.assistant import assistant_engine
 from app.memory.conversation_store import conversation_store
 
+@pytest.mark.live_ollama
 @pytest.mark.asyncio
 async def test_live_chat_generation():
     conv = conversation_store.create_conversation(title="Teste de Conversação Real")

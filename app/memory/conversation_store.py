@@ -61,19 +61,24 @@ class ConversationStore:
         conversation_id: str,
         role: str,
         content: str,
-        sources: Optional[List[Dict[str, Any]]] = None
+        sources: Optional[List[Dict[str, Any]]] = None,
+        tool_trace: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         msg_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
         sources_json = json.dumps(sources, ensure_ascii=False) if sources else None
+        tool_trace_json = (
+            json.dumps(tool_trace, ensure_ascii=False, default=str) if tool_trace else None
+        )
 
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO messages (id, conversation_id, role, content, sources_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO messages
+                    (id, conversation_id, role, content, sources_json, tool_trace_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (msg_id, conversation_id, role, content, sources_json, now)
+                (msg_id, conversation_id, role, content, sources_json, tool_trace_json, now)
             )
             # Update parent conversation timestamp
             conn.execute(
@@ -87,6 +92,7 @@ class ConversationStore:
             "role": role,
             "content": content,
             "sources": sources,
+            "tool_trace": tool_trace,
             "created_at": now
         }
 
@@ -95,7 +101,8 @@ class ConversationStore:
             # Take the most recent N messages, then present them chronologically.
             rows = conn.execute(
                 """
-                SELECT id, conversation_id, role, content, sources_json, created_at
+                SELECT id, conversation_id, role, content, sources_json,
+                       tool_trace_json, created_at
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY created_at DESC, rowid DESC
@@ -116,6 +123,11 @@ class ConversationStore:
                 else:
                     item["sources"] = None
                 del item["sources_json"]
+                raw_trace = item.pop("tool_trace_json", None)
+                try:
+                    item["tool_trace"] = json.loads(raw_trace) if raw_trace else None
+                except json.JSONDecodeError:
+                    item["tool_trace"] = None
                 messages.append(item)
             return messages
 

@@ -11,11 +11,13 @@ from app.models.llama_cpp_server_client import llama_cpp_server
 from app.tools.registry import tool_registry
 from app.config import settings, DEFAULT_LLAMA_CPP_MODEL
 from app.voice import tts_engine
+from app.models.events import ReasoningDelta
 
 logger = logging.getLogger("assistant")
 
 CANCELLED_MARKER = "\n\n_[Geração interrompida pelo usuário.]_"
 NO_TEXT_FALLBACK = "_(O modelo não retornou texto nesta resposta.)_"
+TOOL_TRACE_RESULT_CHARS = 1500
 
 
 def _event(payload: Dict[str, Any]) -> str:
@@ -141,6 +143,7 @@ class AssistantEngine:
         conversation_id: str,
         content: str,
         sources: Optional[list],
+        tool_trace: Optional[list] = None,
     ) -> Optional[Dict[str, Any]]:
         try:
             return conversation_store.add_message(
@@ -148,6 +151,7 @@ class AssistantEngine:
                 role="assistant",
                 content=content,
                 sources=sources or None,
+                tool_trace=tool_trace or None,
             )
         except Exception as e:
             logger.error(f"Failed to save assistant message: {e}")
@@ -178,6 +182,11 @@ class AssistantEngine:
             tool_calls_out=state["calls"],
             **chat_kwargs,
         ):
+            if isinstance(token, ReasoningDelta):
+                # Internal reasoning never joins the answer text or the
+                # tool-call buffer; the caller emits it as its own event.
+                yield token
+                continue
             if not state["buffering"]:
                 if state.get("strip_fence"):
                     if "```" in token:
@@ -303,8 +312,13 @@ class AssistantEngine:
                 )
             else:
                 # Tenta auto-start se o backend padrão for llama-cpp.
-                if settings.default_backend in ("llama-cpp", "llama-cpp-server"):
-                    llama_cpp_server.start(wait_seconds=30)
+                # Bloqueante: roda numa thread para não travar o event loop.
+                # Se já houver um start em andamento, espera por ele.
+                yield _event({
+                    "type": "notice",
+                    "message": "Carregando o modelo local (llama.cpp); isso pode levar alguns minutos.",
+                })
+                await asyncio.to_thread(llama_cpp_server.start, 120)
                 if not llama_cpp_server.available:
                     yield _event({
                         "type": "error",
@@ -328,6 +342,7 @@ class AssistantEngine:
         finished = False
         tool_calls_count = 0
         pending_action_id: Optional[str] = None
+        tool_trace: List[Dict[str, Any]] = []
 
         try:
             yield _event({
@@ -378,6 +393,9 @@ class AssistantEngine:
                         max_tokens=settings.max_output_tokens,
                         tools=tool_schemas if tools_enabled else None,
                     ):
+                        if isinstance(token, ReasoningDelta):
+                            yield _event({"type": "reasoning", "content": token.text})
+                            continue
                         full_response_parts.append(token)
                         yield _event({"type": "token", "content": token})
                 except RuntimeError as exc:
@@ -409,6 +427,9 @@ class AssistantEngine:
                             max_tokens=settings.max_output_tokens,
                             tools=None,
                         ):
+                            if isinstance(token, ReasoningDelta):
+                                yield _event({"type": "reasoning", "content": token.text})
+                                continue
                             full_response_parts.append(token)
                             yield _event({"type": "token", "content": token})
                     else:
@@ -428,6 +449,9 @@ class AssistantEngine:
                     break
 
                 selected_calls = tool_calls[:max_calls]
+                for call_index, call in enumerate(selected_calls):
+                    # Ids link each tool result to its call (OpenAI format).
+                    call.setdefault("id", f"call_{round_index}_{call_index}")
                 working_messages.append({
                     "role": "assistant",
                     "content": "",
@@ -466,6 +490,17 @@ class AssistantEngine:
                             context={"conversation_id": conversation_id},
                         )
 
+                    tool_trace.append({
+                        "tool": name,
+                        "arguments": arguments,
+                        "status": result.get("status", "unknown"),
+                        "result": _truncate(
+                            json.dumps(result.get("result", result.get("error")),
+                                       ensure_ascii=False, default=str),
+                            TOOL_TRACE_RESULT_CHARS,
+                        ),
+                    })
+
                     if result.get("status") == "requires_authorization":
                         pending_action_id = result.get("action_id")
                         note = (
@@ -493,6 +528,7 @@ class AssistantEngine:
                     working_messages.append({
                         "role": "tool",
                         "tool_name": name,
+                        "tool_call_id": call["id"],
                         "content": _truncate(
                             result_text,
                             max(500, int(settings.tool_result_max_chars)),
@@ -510,7 +546,9 @@ class AssistantEngine:
             if settings.tts_enabled and settings.tts_speak_responses and tts_engine.available:
                 tts_engine.speak_async(full_content)
 
-            saved = self._save_assistant_message(conversation_id, full_content, sources)
+            saved = self._save_assistant_message(
+                conversation_id, full_content, sources, tool_trace
+            )
             saved_id = saved["id"] if saved else None
             finished = True
 
@@ -533,6 +571,7 @@ class AssistantEngine:
                     conversation_id,
                     partial + CANCELLED_MARKER,
                     sources,
+                    tool_trace,
                 )
             logger.info(f"Generation cancelled for conversation {conversation_id}")
             raise

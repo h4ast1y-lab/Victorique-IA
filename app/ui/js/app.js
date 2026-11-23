@@ -476,6 +476,7 @@ async function sendMessage() {
   btnStop.style.display = 'inline-flex';
   activeAbortController = new AbortController();
   let accumulated = '';
+  let reasoningBody = null;
   let aborted = false;
 
   try {
@@ -561,6 +562,21 @@ async function sendMessage() {
             'tool-event-auth'
           );
           checkPendingAuthorizations();
+        } else if (data.type === 'reasoning') {
+          // Model's internal reasoning: shown collapsed, never part of the answer.
+          if (!reasoningBody) {
+            const details = document.createElement('details');
+            details.className = 'reasoning-box';
+            const summary = document.createElement('summary');
+            summary.textContent = 'Raciocínio';
+            reasoningBody = document.createElement('div');
+            reasoningBody.className = 'reasoning-body';
+            details.appendChild(summary);
+            details.appendChild(reasoningBody);
+            assistantMsgEl.insertBefore(details, bubble);
+          }
+          reasoningBody.textContent += data.content || '';
+          scrollToBottom();
         } else if (data.type === 'notice') {
           appendToolEvent(toolBox, `ℹ️ ${data.message}`, 'tool-event-notice');
         } else if (data.type === 'token') {

@@ -1,3 +1,5 @@
+import asyncio
+import atexit
 import json
 import re
 import uuid
@@ -29,9 +31,12 @@ from app.voice import tts_engine, stt_engine
 # Initialize database schema on startup
 init_db()
 
-# Auto-start do servidor llama.cpp se configurado (backend padrão).
-if settings.llama_cpp_auto_start and settings.default_backend == "llama-cpp":
-    llama_cpp_server.start(wait_seconds=60)
+# Auto-start do servidor llama.cpp em segundo plano: o modelo pode levar
+# minutos para carregar e a API precisa responder enquanto isso.
+if settings.llama_cpp_auto_start and settings.default_backend in ("llama-cpp", "llama-cpp-server"):
+    llama_cpp_server.start_in_background(wait_seconds=180)
+# Encerra o llama-server iniciado por este app ao sair (libera a VRAM).
+atexit.register(llama_cpp_server.stop)
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 
@@ -200,6 +205,12 @@ def _current_model() -> str:
 
 
 # ----------------- System & Health -----------------
+@app.get("/api/ping")
+async def ping():
+    """Liveness only: answers at once, without probing models or engines."""
+    return {"status": "ok"}
+
+
 @app.get("/api/health")
 async def health_check():
     ollama_ok = await ollama_client.is_alive()
@@ -207,8 +218,14 @@ async def health_check():
     models = await ollama_client.list_models() if ollama_ok else []
     names = [m.get("name", "") for m in models]
     active = _current_model()
+    backend = (settings.default_backend or "ollama").strip().lower()
+    if backend in ("llama-cpp", "llama-cpp-server"):
+        backend_ok = llama_cpp_server.available or llama_cpp_client.available
+    else:
+        backend_ok = ollama_ok
     return {
-        "status": "healthy" if ollama_ok else "degraded",
+        "status": "healthy" if backend_ok else "degraded",
+        "active_backend": backend,
         "app_name": settings.app_name,
         "ollama_online": ollama_ok,
         "ollama_version": ollama_version,
@@ -372,15 +389,15 @@ class LlamaCppServerStartRequest(BaseModel):
 
 @app.get("/api/llama-cpp-server/status")
 async def llama_cpp_server_status():
-    # Tenta auto-start se não estiver vivo e o backend padrão for llama-cpp.
+    # Dispara o auto-start em segundo plano; o status informa "starting".
     if not llama_cpp_server.available and settings.default_backend == "llama-cpp":
-        llama_cpp_server.start(wait_seconds=30)
+        llama_cpp_server.start_in_background(wait_seconds=180)
     return llama_cpp_server.status()
 
 
 @app.post("/api/llama-cpp-server/start")
 async def llama_cpp_server_start(req: LlamaCppServerStartRequest):
-    ok = llama_cpp_server.start(wait_seconds=req.wait_seconds or 60)
+    ok = await asyncio.to_thread(llama_cpp_server.start, req.wait_seconds or 60)
     if not ok:
         raise HTTPException(
             status_code=400, detail=llama_cpp_server._init_error or "Falha ao iniciar servidor."

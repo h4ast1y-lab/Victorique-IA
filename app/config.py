@@ -67,15 +67,18 @@ class Settings(BaseModel):
     ]
     authorization_ttl_seconds: int = 120
 
-    # Modo Turbo para testes: ferramentas externas e autônomas executam diretamente
+    # Modo turbo (opt-in): escrita e internet rodam sem pedir aprovação.
+    # Exclusões continuam exigindo aprovação mesmo com o turbo ligado.
+    # Desligado por padrão: ligue só com ASSISTANT_TURBO_MODE=1.
     turbo_mode: bool = os.environ.get(
-        "ASSISTANT_TURBO_MODE", "1"
-    ).lower() not in ("0", "false", "no")
+        "ASSISTANT_TURBO_MODE", "0"
+    ).lower() in ("1", "true", "yes")
 
-    # Acesso livre a diretórios: permite navegar e ler qualquer disco/pasta do computador (C:\, D:\, etc.)
+    # Acesso a qualquer pasta do computador (opt-in). Por padrão só os
+    # diretórios em authorized_directories são acessíveis. Independe do turbo.
     allow_all_directories: bool = os.environ.get(
-        "ASSISTANT_ALLOW_ALL_DIRS", "1"
-    ).lower() not in ("0", "false", "no")
+        "ASSISTANT_ALLOW_ALL_DIRS", "0"
+    ).lower() in ("1", "true", "yes")
 
     # RAG: Busca Híbrida (vetorial + palavras-chave/BM25)
     rag_hybrid_search: bool = os.environ.get(

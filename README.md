@@ -127,8 +127,16 @@ avisa e continua a conversa sem execução automática.
   o GGUF já está presente em `C:\Users\Usuário\llama.cpp\models\`. O Ollama continua
   disponível como backend alternativo (`backend=ollama` ou `ASSISTANT_DEFAULT_BACKEND=ollama`).
 - **Tool calling**: o modelo pode pedir ferramentas; só as ferramentas livres rodam
-  automaticamente. Escrita, exclusão, criação de pastas e internet sempre param num pedido
-  de autorização no backend. Cada rodada é limitada (3 rodadas / 3 chamadas por padrão).
+  automaticamente. Escrita, exclusão, criação de pastas e internet param num pedido
+  de autorização no backend. Cada resposta é limitada (6 rodadas / 4 chamadas por padrão).
+  No llama-server, as ferramentas usam o formato nativo (`--jinja`); o JSON em texto
+  continua aceito como alternativa.
+- **Modo turbo e acesso a todas as pastas são opcionais e vêm desligados.**
+  `ASSISTANT_TURBO_MODE=1` faz escrita e internet rodarem sem aprovação (exclusões
+  **sempre** pedem aprovação). `ASSISTANT_ALLOW_ALL_DIRS=1` libera leitura em qualquer
+  pasta; sem ele, só os diretórios autorizados são acessíveis. Um não liga o outro.
+- **Raciocínio do modelo**: o `reasoning_content` do Qwen 3.5 chega como evento
+  `reasoning`, aparece recolhido na interface e não é salvo, falado nem reenviado ao modelo.
 - **Isolamento por projeto**: conversas, memórias e documentos são filtrados pelo projeto
   ativo. Um chat sem projeto usa apenas documentos globais — nunca recupera conteúdo de
   outro projeto (verificado por teste automatizado e no E2E).
@@ -156,6 +164,8 @@ Variáveis de ambiente para instalação portátil/testes:
 - `ASSISTANT_MAX_OUTPUT_TOKENS` — limite de tokens por resposta;
 - `ASSISTANT_AUTHORIZED_DIRS` — diretórios autorizados, separados por `;`;
 - `ASSISTANT_TOOL_CALLING` — `0` desativa tool calling;
+- `ASSISTANT_TURBO_MODE` — `1` dispensa aprovação para escrita e internet (padrão `0`);
+- `ASSISTANT_ALLOW_ALL_DIRS` — `1` libera acesso a qualquer pasta (padrão `0`);
 - `ASSISTANT_MAX_TOOL_ROUNDS` / `ASSISTANT_MAX_TOOL_CALLS` — limites do laço de ferramentas;
 - `ASSISTANT_OCR` — `0` desativa o OCR;
 - `ASSISTANT_OCR_LANG` — idiomas do Tesseract (ex.: `por+eng`; só funciona se os dados
@@ -172,6 +182,10 @@ Variáveis de ambiente para instalação portátil/testes:
 - `LLAMA_CPP_MODEL_PATH` — caminho do modelo GGUF (padrão: `models/Qwen_Qwen3.5-9B-IQ4_XS.gguf`);
 - `LLAMA_CPP_HOST` / `LLAMA_CPP_PORT` — endereço do servidor llama-server;
 - `LLAMA_CPP_N_CTX` / `LLAMA_CPP_N_GPU_LAYERS` — contexto e camadas GPU do llama.cpp.
+
+O `llama-server` sobe em segundo plano (a API responde enquanto o modelo carrega;
+`/api/llama-cpp-server/status` mostra `starting`), é encerrado junto com o app e grava
+a saída em `data/llama-server.log`.
 
 **Nunca apague `data/assistant.db` sem backup.** Faça backup antes de qualquer
 manutenção.
@@ -276,8 +290,8 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 ## 8. API principal
 
 - `GET /api/health`, `GET /api/models`, `GET/POST /api/settings`
-- `POST /api/chat` (SSE: `meta`, `sources`, `token`, `tool_call`, `tool_result`,
-  `authorization_required`, `notice`, `error`, `done`)
+- `POST /api/chat` (SSE: `meta`, `sources`, `reasoning`, `token`, `tool_call`,
+  `tool_result`, `authorization_required`, `notice`, `error`, `done`)
 - `GET/POST /api/conversations`, `GET /api/conversations/search`,
   `GET /api/conversations/{id}/messages`, `PUT/DELETE`, `GET .../export`
 - `GET/POST /api/personalities`, `DELETE /api/personalities/{id}`
@@ -313,8 +327,9 @@ O evento SSE `meta` chega antes dos tokens e já contém `conversation_id`; o ev
   tool calling (JSON textual, `tool_calls` nativo, ferramenta protegida pendente,
   limite de rodadas, fallback sem suporte), OCR de PDF só-imagem, voz (TTS/STT) e
   servidor llama.cpp.
-- Resultado desta rodada: **50 testes passando** (os 3 testes de geração ao vivo com
-  Ollama requerem o servidor rodando e são pulados quando offline).
+- Resultado desta rodada: **71 testes passando** (os testes marcados `live_ollama`
+  requerem o Ollama rodando e são pulados quando ele está offline).
+- A suíte roda com os padrões de fábrica (turbo e acesso total desligados).
 - E2E real com `llama-cpp-server` + `Qwen_Qwen3.5-9B-IQ4_XS.gguf`: chat funcionou
   corretamente (`144 × 15 = 2160`).
 - O banco real `data/assistant.db` foi comparado com o backup pré-auditoria: schema e

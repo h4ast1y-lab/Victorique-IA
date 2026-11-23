@@ -1,3 +1,4 @@
+import json
 from typing import List, Dict, Any, Optional
 from app.config import settings
 from app.core.personality import personality_manager
@@ -5,6 +6,26 @@ from app.memory.memory_store import memory_store
 from app.memory.project_store import project_store
 from app.rag.vector_store import vector_store
 from app.tools.registry import tool_registry
+
+
+TOOL_TRACE_NOTE_CHARS = 2000
+
+
+def _tool_trace_note(trace: List[Dict[str, Any]]) -> str:
+    """
+    Compact record of the tools used in a past answer, so the model keeps
+    what a tool returned across turns instead of guessing it again.
+    """
+    lines = ["[Ferramentas usadas nesta resposta (resultado resumido)]"]
+    for item in trace:
+        args = json.dumps(item.get("arguments") or {}, ensure_ascii=False, default=str)
+        lines.append(
+            f"- {item.get('tool')}({args}) -> {item.get('status')}: {item.get('result', '')}"
+        )
+    note = "\n".join(lines)
+    if len(note) > TOOL_TRACE_NOTE_CHARS:
+        note = note[:TOOL_TRACE_NOTE_CHARS] + "...[truncado]"
+    return note
 
 
 class ContextBuilder:
@@ -90,12 +111,14 @@ class ContextBuilder:
 
         if settings.tool_calling_enabled:
             turbo_note = (
-                "\nMODO TURBO AUTÔNOMO ATIVO: O usuário concedeu permissão total para você executar "
-                "ferramentas diretamente (como `read_url`, `search_web`, `list_directory`, `read_file`, `write_file`, etc.) "
-                "sem interromper para pedir confirmações. Você tem permissão para navegar e ler arquivos em qualquer pasta do "
-                "computador (C:\\, D:\\, Downloads, Documentos, Livros, etc.). Chame a ferramenta necessária imediatamente e "
-                "forneça a resposta completa utilizando a ampla janela de contexto disponível!"
+                "\nMODO TURBO ATIVO: leitura, escrita e internet rodam sem pedir confirmação; "
+                "exclusões continuam exigindo aprovação do usuário. Chame a ferramenta "
+                "necessária diretamente."
             ) if getattr(settings, "turbo_mode", False) else ""
+            if getattr(settings, "allow_all_directories", False):
+                turbo_note += (
+                    "\nACESSO A PASTAS: você pode navegar e ler arquivos em qualquer pasta do computador."
+                )
             system_parts.append(
                 "INSTRUÇÕES OBRIGATÓRIAS SOBRE FERRAMENTAS:\n"
                 "- Você TEM ferramentas integradas para interagir com o computador e com a internet.\n"
@@ -139,9 +162,12 @@ class ContextBuilder:
             recent_history = valid_history
 
         for m in recent_history:
+            content = m["content"]
+            if m["role"] == "assistant" and m.get("tool_trace"):
+                content = _tool_trace_note(m["tool_trace"]) + "\n\n" + content
             formatted_messages.append({
                 "role": m["role"],
-                "content": m["content"]
+                "content": content
             })
 
         return {

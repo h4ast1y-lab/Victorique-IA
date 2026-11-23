@@ -16,6 +16,23 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
+# Additive, idempotent column migrations: (table, column, SQL type).
+# Never drop or rename here; existing databases must keep working.
+COLUMN_MIGRATIONS = [
+    # Compact record of the tools used in an assistant answer, so the model
+    # can still see what a tool returned in later turns.
+    ("messages", "tool_trace_json", "TEXT"),
+]
+
+
+def _apply_column_migrations(cur: sqlite3.Cursor) -> None:
+    for table, column, sql_type in COLUMN_MIGRATIONS:
+        existing = {row[1] for row in cur.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+            logger.info("Migração: coluna %s.%s adicionada.", table, column)
+
+
 def init_db():
     """Initializes database schema and default records."""
     conn = get_connection()
@@ -123,6 +140,8 @@ def init_db():
         details TEXT
     );
     """)
+
+    _apply_column_migrations(cur)
 
     # Populate default personality if none exists
     cur.execute("SELECT COUNT(*) FROM personalities")

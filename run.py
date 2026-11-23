@@ -64,7 +64,7 @@ def wait_for_backend(url: str, timeout: float = 12.0) -> bool:
     start = time.time()
     while time.time() - start < timeout:
         try:
-            r = httpx.get(url, timeout=1.0)
+            r = httpx.get(url, timeout=3.0)
             if r.status_code == 200:
                 return True
         except Exception:
@@ -119,7 +119,7 @@ def main():
     backend_thread.start()
 
     print(f"Aguardando servidor local em {app_url}...")
-    if not wait_for_backend(f"{app_url}/api/health", timeout=15.0):
+    if not wait_for_backend(f"{app_url}/api/ping", timeout=30.0):
         print("Erro: o servidor backend não respondeu a tempo.")
         print("Verifique se a porta está ocupada e execute novamente.")
         sys.exit(1)

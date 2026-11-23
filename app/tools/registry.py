@@ -28,6 +28,7 @@ class ToolDefinition:
         func: Callable,
         risk_description: str = "",
         parameters: Optional[Dict[str, Any]] = None,
+        always_confirm: bool = False,
     ):
         self.name = name
         self.description = description
@@ -35,13 +36,22 @@ class ToolDefinition:
         self.func = func
         self.risk_description = risk_description
         self.parameters = parameters or _schema({})
+        # Destructive tools ask for approval even when turbo mode is on.
+        self.always_confirm = always_confirm
+
+    @property
+    def is_protected(self) -> bool:
+        """Category-based: true for tools that normally need user approval."""
+        return self.category in (ActionCategory.REQUIRES_AUTH, ActionCategory.EXTERNAL)
 
     @property
     def needs_approval(self) -> bool:
+        if self.always_confirm:
+            return True
         if getattr(settings, "turbo_mode", False):
-            # No modo turbo/testes, o assistente tem permissão para agir sem interromper o fluxo
+            # Turbo (opt-in): escrita e internet rodam sem interromper o fluxo.
             return False
-        return self.category in (ActionCategory.REQUIRES_AUTH, ActionCategory.EXTERNAL)
+        return self.is_protected
 
 
 class ToolRegistry:
@@ -149,6 +159,7 @@ class ToolRegistry:
             category=ActionCategory.REQUIRES_AUTH,
             func=delete_file,
             risk_description="ATENÇÃO: Esta ação excluirá permanentemente o arquivo ou pasta especificado.",
+            always_confirm=True,
             parameters=_schema({
                 "path": {"type": "string", "description": "Caminho do arquivo/pasta a excluir."},
                 "recursive": {
@@ -293,7 +304,7 @@ class ToolRegistry:
         tool = self.tools.get(action.get("action_type"))
         if not tool:
             return {"status": "error", "error": "Ferramenta da autorização não existe mais."}
-        if not tool.needs_approval:
+        if not (tool.is_protected or tool.always_confirm):
             return {"status": "error", "error": "Ação livre não deveria exigir autorização."}
         params = action.get("payload", {})
         return await self._run_tool(tool, params)
