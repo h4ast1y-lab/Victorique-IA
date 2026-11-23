@@ -113,11 +113,26 @@ def _record(kind: str, description: str, moves: List[Move]) -> Dict[str, Any]:
     return batch
 
 
+ORGANIZED_MIN_FILES = 3
+
+
+def _tell_life(kind: str, description: str, moved: int) -> None:
+    """A real reorganization (not a single rename) earns a comment from Victorique."""
+    if kind == "rename" or moved < ORGANIZED_MIN_FILES:
+        return
+    try:
+        from app.life.service import life_service  # lazy: optional, UI-facing feature
+        life_service.notify("organizado", {"n": moved, "descricao": (description or "")[:160]})
+    except Exception:
+        pass
+
+
 def _run(kind: str, description: str, moves: List[Move]) -> Dict[str, Any]:
     with _lock:
         _validate(moves)
         _apply(moves)
         batch = _record(kind, description, moves)
+    _tell_life(kind, description, len(moves))
     return {
         "status": "done",
         "batch_id": batch["id"],

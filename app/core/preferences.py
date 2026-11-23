@@ -45,6 +45,21 @@ SCHEMA: Dict[str, tuple] = {
     "show_suggestions": ("bool", True, None),
     "show_portrait": ("bool", True, None),
     "idle_minutes": ("int", 5, (1, 120)),
+    # --- Vida própria (spontaneous lines; app/life) ---
+    "life_boredom": ("bool", True, None),
+    "life_comments": ("bool", True, None),
+    "life_boredom_min": ("int", 20, (5, 240)),
+    "life_boredom_max": ("int", 45, (5, 240)),
+    "life_max_per_hour": ("int", 2, (1, 10)),
+    "life_min_gap": ("int", 15, (1, 240)),
+    "life_dnd": ("bool", False, None),
+    "life_voice": ("bool", False, None),
+    "life_generate": ("bool", True, None),
+    "life_quiet_apps": (
+        "str",
+        "ms-teams.exe, teams.exe, zoom.exe, powerpnt.exe, obs64.exe, robloxplayerbeta.exe",
+        600,
+    ),
 }
 
 # Preferences mirrored onto the live settings object.

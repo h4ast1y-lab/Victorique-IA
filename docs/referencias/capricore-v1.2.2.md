@@ -29,7 +29,12 @@ xadrez, Spotify, Discord, chamadas.
 
 ## Pendências que valem a pena (por ordem de valor)
 
-### 1. Vida própria: tédio e comentários avulsos (spec, seção 8)
+### 1. Vida própria: tédio e comentários avulsos (spec, seção 8) — FEITO
+
+Implementado em 23/11/2026 em `app/life/` (README, seção 13), com estas regras adaptadas:
+teto padrão de 2 falas/h e 15 min entre falas, sem horário de silêncio (a hora tardia é
+um dos assuntos dela), e o "Silêncio" do balão cala por 2 horas. As notas abaixo ficam
+como registro do estudo.
 
 O `initiative-*` do CapriCore resolve exatamente a seção 8 da spec. Regras de projeto a
 reaproveitar (todas deterministas, decididas **antes** de chamar o modelo):

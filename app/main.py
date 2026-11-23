@@ -30,6 +30,7 @@ from app.rag.document_loader import document_loader
 from app.security.permissions import security_manager
 from app.tools.registry import tool_registry
 from app.tools import organizer
+from app.life.service import life_service
 from app.voice import tts_engine, stt_engine
 
 # Initialize database schema on startup
@@ -853,6 +854,53 @@ async def get_clip(state: str, name: str):
     if path is None:
         raise HTTPException(status_code=404, detail="Clipe não encontrado.")
     return FileResponse(str(path))
+
+# ----------------- Vida própria (spontaneous lines) -----------------
+class LifeTick(BaseModel):
+    app_idle_seconds: float = Field(0, ge=0, le=10_000_000)
+    typing: bool = False
+    generating: bool = False
+    visible: bool = True
+    settings_open: bool = False
+    backend: Optional[str] = Field(None, max_length=40)
+    personality_id: Optional[str] = Field(None, max_length=80)
+
+
+class LifeSilence(BaseModel):
+    minutes: int = Field(120, ge=1, le=24 * 60)
+
+
+class LifeTest(LifeTick):
+    category: str = Field("tedio", max_length=20)
+
+
+@app.post("/api/life/tick")
+async def life_tick(req: LifeTick):
+    return await life_service.tick(req.model_dump())
+
+
+@app.get("/api/life/status")
+async def life_status():
+    return life_service.status()
+
+
+@app.post("/api/life/silence")
+async def life_silence(req: LifeSilence):
+    return {"silenced_until": life_service.silence(req.minutes)}
+
+
+@app.post("/api/life/resume")
+async def life_resume():
+    life_service.resume()
+    return life_service.status()
+
+
+@app.post("/api/life/test")
+async def life_test(req: LifeTest):
+    try:
+        return await life_service.test(req.category, req.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # ----------------- Organizer (history of moves, undo) -----------------
 @app.get("/api/operations")

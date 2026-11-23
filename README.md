@@ -165,6 +165,8 @@ Tudo por padrão em `data/`:
 | `data/assistant.db` | histórico, memórias, projetos, personalidades, índice RAG, auditoria |
 | `data/documents/` | cópias dos documentos importados |
 | `data/backups/` | snapshots do banco |
+| `data/falas.md` | banco de falas espontâneas da Victorique (editável; criado na primeira vez) |
+| `data/vida_propria.json` | estado da vida própria: últimas falas, limites, silêncio |
 
 Variáveis de ambiente para instalação portátil/testes:
 
@@ -306,6 +308,7 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 | Voz STT (fala → texto) | implementado via SpeechRecognition/Sphinx (offline); arquivos de áudio via `/api/stt/transcribe`; microfone requer PyAudio (não disponível no Python 3.15) |
 | Backend llama.cpp (servidor local) | implementado via `llama-server.exe` + `Qwen_Qwen3.5-9B-IQ4_XS.gguf` (5,5 GB); E2E real passou (`144 × 15 = 2160`); Ollama continua como alternativa |
 | Ollama como backend alternativo | implementado; `qwen2.5-coder:7b` e `qwen2.5:3b` disponíveis |
+| Vida própria: tédio (propõe um Caso) e comentários avulsos, com Silêncio e não perturbar | implementado; testado automaticamente, no navegador e com o Claude Code real (seção 13) |
 
 ---
 
@@ -328,6 +331,8 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 - `GET /api/stt/status`, `POST /api/stt/listen`, `POST /api/stt/transcribe`
 - `GET /api/llama-cpp-server/status`, `POST /api/llama-cpp-server/start`,
   `POST /api/llama-cpp-server/stop`
+- `POST /api/life/tick`, `GET /api/life/status`, `POST /api/life/silence`,
+  `POST /api/life/resume`, `POST /api/life/test` (vida própria, seção 13)
 - `GET /api/ping` (responde na hora, sem checar backends; usado pelo `run.py`)
 - `GET /api/claude-code/status` (SDK instalado, caminho do `claude.exe`, pasta de
   trabalho, modelo e último erro)
@@ -489,3 +494,50 @@ pastas protegidas do app.
   | Criar `victorique_teste2.txt`, recusando | Negado; nada criado; a Victorique explicou e não tentou de novo |
   O arquivo de teste foi apagado depois.
 
+---
+
+## 13. Vida própria
+
+A Victorique puxa assunto sozinha, de vez em quando. Tudo fica em **Configurações → Vida
+própria**, e o ícone de lua no retrato liga o **não perturbar**.
+
+- **Tédio:** depois de 20 a 45 minutos (sorteado; configurável) sem você falar com ela,
+  e com você no computador, ela propõe um enigma, uma pergunta para investigar ou uma
+  curiosidade ligada aos Casos abertos e ao que você contou sobre si. **Investigar** cria
+  o Caso, seleciona-o e deixa a pergunta pronta no campo de mensagem.
+- **Comentários avulsos:** hora tardia (23:30 às 5:00, uma vez por noite), pasta
+  bagunçada (25+ arquivos soltos de 5+ tipos numa pasta autorizada ou subpasta direta;
+  a mesma pasta no máximo uma vez por semana), organização concluída (3+ arquivos) e
+  retorno depois de 45+ minutos longe do PC ou de 6+ horas com o app fechado.
+- **Limites:** no máximo 2 falas por hora e 15 minutos entre falas (configuráveis). Um
+  minuto de espera depois de uma tentativa sem fala. O teste das Configurações ignora
+  os limites e não conta para eles.
+- **Ela fica calada** com o não perturbar ligado, durante o «Silêncio» (2 horas, pelo
+  balão), com você longe do PC (5+ min sem mexer no teclado ou no mouse), com a janela
+  minimizada ou as configurações abertas, enquanto você digita ou ela responde, com
+  qualquer app em tela cheia (vídeo, jogo, apresentação) e com os apps da lista de
+  silêncio na frente (Teams, Zoom, PowerPoint, OBS e Roblox por padrão).
+- **As falas:** com **Variar as falas com o modelo** ligado, o modo atual escreve uma
+  fala nova (no Claude Code, numa chamada sem ferramenta nenhuma; leva de 2 a 10 s e
+  consome um pouco da cota). Se o modelo estiver desligado, falhar, repetir uma fala
+  recente ou quebrar as regras, ela usa o banco `data/falas.md`, que você pode editar.
+  O modelo também pode escolher ficar calada. As últimas 12 falas ficam guardadas para
+  não se repetirem.
+- **Privacidade:** ela comenta só nomes de pastas, contagens e extensões. O conteúdo dos
+  arquivos nunca é lido, e o caminho completo das pastas não vai para o modelo. Do
+  Windows, o app lê apenas há quanto tempo o teclado e o mouse estão parados, e o nome
+  do programa na frente e se ele está em tela cheia. Títulos de janela e a tela não são
+  lidos.
+- **Voz:** **Falar em voz alta** lê as falas com a voz do app (desligado por padrão).
+
+Como funciona: a interface pergunta ao servidor a cada 20 s (`POST /api/life/tick`) e
+envia o próprio estado (digitando, respondendo, janela visível). O servidor
+(`app/life/`) decide tudo antes de chamar qualquer modelo: `observer.py` lê os sinais do
+Windows, `policy.py` aplica os portões e os gatilhos, `generator.py` escreve a fala e
+`service.py` a entrega num pedido seguinte, conferindo os portões de novo.
+
+Verificação em 23/11/2026: 50 testes automatizados (`tests/test_life.py`); no navegador,
+a pasta bagunçada de teste gerou o comentário, o tédio de teste abriu o Caso com a
+pergunta no campo, e o «Silêncio» e o não perturbar bloquearam as falas; com o Claude
+Code real, o tédio saiu ligado a um Caso aberto (10 s, primeira chamada) e o comentário
+da pasta levou 2 s.

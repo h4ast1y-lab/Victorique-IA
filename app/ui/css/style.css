@@ -663,3 +663,38 @@ kbd { font-size: 0.8em; padding: 2px 7px; border-radius: 6px; border: 1px solid 
 .archived-cases summary { font-size: 0.82em; color: var(--muted); cursor: pointer; padding: 6px 6px; border-radius: 8px; }
 .archived-cases summary:hover { color: var(--text); }
 .list-item.archived .list-item-title { color: var(--muted); }
+
+/* ----------------- Vida própria ----------------- */
+.portrait figcaption .life-dnd { margin-left: auto; width: 26px; height: 26px; color: var(--muted); }
+.portrait figcaption .life-dnd .ic { width: 14px; height: 14px; }
+.portrait figcaption .life-dnd[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.life-quiet { font-size: 0.92em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.life-bubble {
+  position: fixed; right: 24px; bottom: 112px; z-index: 70; width: min(360px, calc(100vw - 32px));
+  padding: 12px 14px 12px; border-radius: 16px 16px 4px 16px;
+  background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow);
+  animation: bubble-in .28s ease-out;
+}
+.life-bubble-head { display: flex; align-items: center; gap: 8px; font-size: 0.86em; }
+.life-bubble-head .icon-btn { margin-left: auto; width: 26px; height: 26px; }
+.life-bubble-head .icon-btn .ic { width: 14px; height: 14px; }
+.life-bubble-mark {
+  width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: var(--accent); color: var(--on-accent); font-family: var(--font-serif, Georgia, serif); font-size: 0.86em;
+}
+.life-bubble-tag { color: var(--muted); font-size: 0.92em; }
+.life-bubble-text { margin: 8px 0 10px; line-height: 1.55; color: var(--text); white-space: pre-wrap; }
+.life-bubble-text em { color: var(--text-2); }
+.life-bubble-case {
+  display: flex; align-items: center; gap: 7px; margin: -2px 0 10px; padding: 7px 10px; border-radius: 10px;
+  background: var(--accent-soft); color: var(--text-2); font-size: 0.85em;
+}
+.life-bubble-case .ic { width: 15px; height: 15px; color: var(--accent); flex: none; }
+.life-bubble-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.inline-actions { display: flex; gap: 8px; align-items: center; }
+.settings-section[data-section="life"] .field-row > .field { flex: 1; min-width: 0; }
+.inline-actions select { flex: 1; min-width: 0; }
+@keyframes bubble-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .life-bubble { animation: none; } }
+@media (max-width: 820px) { .life-bubble { right: 16px; bottom: 96px; } }

@@ -36,3 +36,8 @@ data/operations.tmp
 
 # Configuração local do Claude Code
 .claude/
+
+# Vida própria: estado e banco de falas editado (pessoais)
+data/vida_propria.json
+data/.vida-*
+data/falas.md

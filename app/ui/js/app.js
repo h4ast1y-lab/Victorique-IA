@@ -64,6 +64,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadModels();
   await initVoice();
   initPortrait();
+  initLife();
   authPollTimer = setInterval(checkPendingAuthorizations, 5000);
   setInterval(checkHealth, 30000);
 });
@@ -269,6 +270,7 @@ async function loadPreferences() {
   applyAppearance();
   fillPreferenceControls();
   updateUserLabel();
+  updateLifeControls();
 }
 
 let prefSaveTimer = null;
@@ -279,6 +281,7 @@ function savePref(name, value, { immediate = false } = {}) {
   pendingPrefChanges[name] = value;
   applyAppearance();
   if (name === 'user_name') updateUserLabel();
+  if (name.startsWith('life_')) updateLifeControls();
   clearTimeout(prefSaveTimer);
   prefSaveTimer = setTimeout(flushPrefs, immediate ? 0 : 600);
 }
@@ -1882,6 +1885,7 @@ async function openSettingsModal(section = null) {
   loadModels();
   loadBackups();
   checkHealth();
+  loadLifeStatus();
 }
 
 // ----------------- Backup -----------------
@@ -2134,4 +2138,235 @@ function initPortrait() {
   $('portraitVideo').addEventListener('error', () => { $('portraitVideo').hidden = true; });
   setInterval(refreshVisualState, 15000);
   loadClips();
+}
+
+// ----------------- Vida própria -----------------
+// The server decides whether and what she says (app/life); the UI only reports
+// its own state, shows the balloon and carries out the user's answer.
+const LIFE_TICK_MS = 20000;
+const LIFE_FAST_TICK_MS = 4000;
+const LIFE_SILENCE_MINUTES = 120;
+const LIFE_TAGS = {
+  tedio: 'entediada', tarde: 'hora tardia', bagunca: 'sobre uma pasta',
+  organizado: 'organização concluída', retorno: 'de volta',
+};
+const life = { timer: null, busy: false, lastTyping: 0, event: null, hideTimer: null, status: null };
+
+function lifeUiState() {
+  const draft = document.hasFocus() && document.activeElement === chatInput && chatInput.value.trim().length > 0;
+  return {
+    app_idle_seconds: Math.max(0, (Date.now() - visual.lastActivity) / 1000),
+    typing: draft || Date.now() - life.lastTyping < 15000,
+    generating: isGenerating,
+    visible: document.visibilityState === 'visible',
+    settings_open: !$('settingsModal').hidden,
+    backend: currentBackend || null,
+    personality_id: currentPersonalityId || null,
+  };
+}
+
+function scheduleLifeTick(ms) {
+  clearTimeout(life.timer);
+  life.timer = setTimeout(lifeTick, ms);
+}
+
+async function lifeTick() {
+  if (life.busy) return;
+  life.busy = true;
+  let next = LIFE_TICK_MS;
+  try {
+    const data = await api('/api/life/tick', { method: 'POST', body: lifeUiState() });
+    renderLifeStatus(data.status);
+    if (data.event) showLifeBubble(data.event);
+    if (data.status && data.status.reason === 'preparando') next = LIFE_FAST_TICK_MS;
+  } catch (err) {
+    // Server restarting or offline: just try again later.
+  } finally {
+    life.busy = false;
+    scheduleLifeTick(next);
+  }
+}
+
+function lifeTime(epochSeconds) {
+  return new Date(epochSeconds * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderLifeStatus(status) {
+  if (!status) return;
+  life.status = status;
+  const note = $('lifeQuietNote');
+  if (status.silenced_until) {
+    note.textContent = `· em silêncio até ${lifeTime(status.silenced_until)}`;
+    note.hidden = false;
+  } else {
+    note.hidden = true;
+  }
+  const card = $('lifeStatus');
+  if (!card) return;
+  card.innerHTML = '';
+  const line = document.createElement('div');
+  line.append('Agora: ', Object.assign(document.createElement('strong'), { textContent: status.label }));
+  const counts = document.createElement('div');
+  counts.textContent = `Falas na última hora: ${status.spoken_last_hour} de ${status.max_per_hour}.`;
+  card.append(line, counts);
+  if (typeof status.boredom_in === 'number' && status.boredom_in > 0) {
+    const boredom = document.createElement('div');
+    boredom.textContent = `O tédio chega em cerca de ${Math.ceil(status.boredom_in / 60)} min sem você falar com ela.`;
+    card.append(boredom);
+  }
+  if (status.silenced_until) {
+    const row = document.createElement('div');
+    row.className = 'inline-actions';
+    row.style.marginTop = '8px';
+    const resume = Object.assign(document.createElement('button'), {
+      className: 'btn btn-secondary btn-sm', type: 'button', textContent: 'Encerrar o silêncio',
+    });
+    resume.addEventListener('click', resumeLife);
+    row.append(`Silêncio até ${lifeTime(status.silenced_until)}.`, resume);
+    card.append(row);
+  }
+  const hint = $('lifeLinesHint');
+  if (hint && status.lines_file) {
+    hint.innerHTML = '';
+    const path = document.createElement('code');
+    path.textContent = status.lines_file;
+    hint.append('Banco de falas, editável num editor de texto: ', path, '. As mudanças valem na próxima fala.');
+  }
+}
+
+async function loadLifeStatus() {
+  try {
+    renderLifeStatus(await api('/api/life/status'));
+  } catch (err) {
+    $('lifeStatus').textContent = 'Não consegui consultar o estado.';
+  }
+}
+
+function updateLifeControls() {
+  const dnd = !!prefs.life_dnd;
+  const button = $('btnLifeDnd');
+  button.setAttribute('aria-pressed', String(dnd));
+  button.title = dnd ? 'Não perturbar ligado: clique para ela voltar a puxar assunto'
+                     : 'Não perturbar: ela não puxa assunto';
+  const box = document.querySelector('[data-pref="life_dnd"]');
+  if (box) box.checked = dnd;
+}
+
+function lifeTextHtml(text) {
+  // Plain text; only *ação* becomes italic.
+  return escape(text).replace(/\*([^*\n]{1,160})\*/g, '<em>$1</em>');
+}
+
+function showLifeBubble(event) {
+  life.event = event;
+  const bubble = $('lifeBubble');
+  bubble.dataset.category = event.category;
+  $('lifeBubbleMark').textContent = avatarText(activeProfile() || { name: 'V' });
+  $('lifeBubbleName').textContent = activeProfileName();
+  $('lifeBubbleTag').textContent = (event.test ? 'teste · ' : '') + (LIFE_TAGS[event.category] || '');
+  $('lifeBubbleText').innerHTML = lifeTextHtml(event.text);
+  const hasCase = event.category === 'tedio' && !!event.case;
+  $('lifeBubbleCase').hidden = !hasCase;
+  $('lifeBubbleCaseTitle').textContent = hasCase ? event.case.titulo : '';
+  $('btnLifeAccept').hidden = !hasCase;
+  $('btnLifeLater').hidden = !hasCase;
+  bubble.hidden = false;
+  markSpeaking(event.text);
+  if (prefs.life_voice && ttsAvailable) {
+    const spoken = event.text.replace(/\*[^*]*\*/g, ' ').replace(/\s+/g, ' ').trim();
+    if (spoken) api('/api/tts/speak', { method: 'POST', body: { text: spoken, async_: true } }).catch(() => {});
+  }
+  clearTimeout(life.hideTimer);
+  const stay = hasCase ? 5 * 60000 : Math.min(90000, 30000 + event.text.length * 120);
+  life.hideTimer = setTimeout(hideLifeBubble, stay);
+}
+
+function hideLifeBubble() {
+  clearTimeout(life.hideTimer);
+  $('lifeBubble').hidden = true;
+  life.event = null;
+}
+
+async function silenceLife() {
+  hideLifeBubble();
+  try {
+    const data = await api('/api/life/silence', { method: 'POST', body: { minutes: LIFE_SILENCE_MINUTES } });
+    toast(`Silêncio até ${lifeTime(data.silenced_until)}.`);
+  } catch (err) {
+    toast(`Não consegui silenciar: ${err.message}`, 'error');
+  }
+  scheduleLifeTick(0);
+}
+
+async function resumeLife() {
+  try {
+    renderLifeStatus(await api('/api/life/resume', { method: 'POST' }));
+    toast('Ela pode voltar a falar.');
+  } catch (err) {
+    toast(`Erro: ${err.message}`, 'error');
+  }
+}
+
+async function acceptLifeCase() {
+  const event = life.event;
+  if (!event || !event.case) return;
+  hideLifeBubble();
+  try {
+    const project = await api('/api/projects', {
+      method: 'POST',
+      body: {
+        name: event.case.titulo,
+        description: 'Mistério proposto pela Victorique num momento de tédio.',
+        instructions: `Pergunta do Caso: ${event.case.pergunta}\n\nComo ela propôs: ${event.text}`,
+      },
+    });
+    await loadProjects();
+    if (currentProjectId === project.id) currentProjectId = null;
+    await selectProject(project);
+    chatInput.value = `Aceito o desafio: ${event.case.pergunta}`;
+    autoGrow();
+    updateSendState();
+    chatInput.focus();
+    toast(`Caso aberto: ${project.name}`);
+  } catch (err) {
+    toast(`Não consegui abrir o Caso: ${err.message}`, 'error');
+  }
+}
+
+async function testLife() {
+  const button = $('btnLifeTest');
+  button.disabled = true;
+  button.textContent = 'Pensando…';
+  try {
+    const event = await api('/api/life/test', {
+      method: 'POST', body: { ...lifeUiState(), category: $('lifeTestCategory').value },
+    });
+    closeModal('settingsModal');
+    showLifeBubble(event);
+  } catch (err) {
+    toast(`O teste falhou: ${err.message}`, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Testar';
+  }
+}
+
+function initLife() {
+  chatInput.addEventListener('input', () => { life.lastTyping = Date.now(); });
+  $('btnLifeClose').addEventListener('click', hideLifeBubble);
+  $('btnLifeLater').addEventListener('click', hideLifeBubble);
+  $('btnLifeSilence').addEventListener('click', silenceLife);
+  $('btnLifeAccept').addEventListener('click', acceptLifeCase);
+  $('btnLifeTest').addEventListener('click', testLife);
+  $('btnLifeDnd').addEventListener('click', () => {
+    const on = !prefs.life_dnd;
+    savePref('life_dnd', on, { immediate: true });
+    if (on) hideLifeBubble();
+    scheduleLifeTick(500);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') scheduleLifeTick(1000);
+  });
+  updateLifeControls();
+  scheduleLifeTick(3000);
 }
