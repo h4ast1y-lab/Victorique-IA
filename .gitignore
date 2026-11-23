@@ -28,3 +28,11 @@ Desktop.ini
 *.tmp
 dist/
 build/
+
+# Clipes do retrato e histórico do Organizador (pessoais)
+data/clips/
+data/operations.json
+data/operations.tmp
+
+# Configuração local do Claude Code
+.claude/

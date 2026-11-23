@@ -21,8 +21,22 @@ TARGET_KEYS = ("file_path", "notebook_path", "command", "url", "query", "path", 
 MAX_TARGET_CHARS = 200
 
 
+# Friendly names for the authorization bar.
+FRIENDLY_TOOLS = {
+    "mcp__victorique__mover_arquivos": "mover arquivos (plano em lote)",
+    "mcp__victorique__renomear": "renomear um item",
+    "mcp__victorique__mandar_para_reserva": "mandar itens para a Reserva (_Quarentena)",
+}
+
+
 def describe_target(tool_name: str, input_data: Dict[str, Any]) -> str:
     """What the tool acts on, as shown in the authorization bar."""
+    moves = input_data.get("moves")
+    if isinstance(moves, list):
+        return f"{len(moves)} item(ns) no plano"
+    paths = input_data.get("paths")
+    if isinstance(paths, list):
+        return f"{len(paths)} item(ns) para a Reserva"
     for key in TARGET_KEYS:
         value = input_data.get(key)
         if value:
@@ -76,7 +90,8 @@ class PermissionBridge:
                 )
                 return PermissionResultAllow(updated_input=input_data)
 
-        description = f"Claude Code quer usar {tool_name}."
+        friendly = FRIENDLY_TOOLS.get(tool_name)
+        description = f"Victorique quer {friendly}." if friendly else f"Claude Code quer usar {tool_name}."
         action_id, future = security_manager.create_waiting_request(
             action_type=tool_name,
             resource=target,

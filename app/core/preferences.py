@@ -43,6 +43,8 @@ SCHEMA: Dict[str, tuple] = {
     "show_reasoning": ("bool", True, None),
     "show_tool_events": ("bool", True, None),
     "show_suggestions": ("bool", True, None),
+    "show_portrait": ("bool", True, None),
+    "idle_minutes": ("int", 5, (1, 120)),
 }
 
 # Preferences mirrored onto the live settings object.

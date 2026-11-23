@@ -6,6 +6,7 @@ from app.security.permissions import ActionCategory, security_manager
 from app.tools.file_tools import (
     list_directory, read_file, search_files, write_file, create_directory, delete_file
 )
+from app.tools.organizer import move_files, rename_file
 from app.tools.system_tools import calculate, get_system_info, get_system_metrics
 from app.tools.web_search import search_web, read_url
 
@@ -155,18 +156,60 @@ class ToolRegistry:
         ))
         self.register(ToolDefinition(
             name="delete_file",
-            description="Remove um arquivo (ou pasta vazia) em diretório autorizado.",
+            description=(
+                "Descarta um arquivo ou pasta: o item vai para a Reserva (_Quarentena) dentro da "
+                "pasta autorizada. Nada é apagado de verdade, e o usuário pode desfazer."
+            ),
             category=ActionCategory.REQUIRES_AUTH,
             func=delete_file,
-            risk_description="ATENÇÃO: Esta ação excluirá permanentemente o arquivo ou pasta especificado.",
+            risk_description="O item sairá do lugar e irá para a Reserva (_Quarentena). Pode ser desfeito.",
             always_confirm=True,
             parameters=_schema({
-                "path": {"type": "string", "description": "Caminho do arquivo/pasta a excluir."},
+                "path": {"type": "string", "description": "Caminho do arquivo/pasta a descartar."},
                 "recursive": {
                     "type": "boolean",
-                    "description": "Permite excluir diretório não vazio (exige aprovação específica).",
+                    "description": "Necessário para enviar uma pasta não vazia à Reserva.",
                 },
             }, required=["path"]),
+        ))
+        self.register(ToolDefinition(
+            name="move_files",
+            description=(
+                "Move vários arquivos/pastas de uma vez, segundo um plano origem → destino "
+                "(caminhos completos). O usuário vê o plano inteiro antes de aprovar; tudo fica "
+                "no histórico e pode ser desfeito. Destinos existentes nunca são sobrescritos."
+            ),
+            category=ActionCategory.REQUIRES_AUTH,
+            func=move_files,
+            risk_description="Os itens listados mudarão de pasta conforme o plano. Pode ser desfeito.",
+            always_confirm=True,
+            parameters=_schema({
+                "moves": {
+                    "type": "array",
+                    "description": "Plano: lista de {origem, destino}, ambos caminhos completos.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "origem": {"type": "string"},
+                            "destino": {"type": "string"},
+                        },
+                        "required": ["origem", "destino"],
+                    },
+                },
+                "descricao": {"type": "string", "description": "Resumo do plano (ex.: 'Separar PDFs por ano')."},
+            }, required=["moves"]),
+        ))
+        self.register(ToolDefinition(
+            name="rename_file",
+            description="Renomeia um arquivo ou pasta na mesma pasta (sem sobrescrever). Pode ser desfeito.",
+            category=ActionCategory.REQUIRES_AUTH,
+            func=rename_file,
+            risk_description="O item será renomeado. Pode ser desfeito.",
+            always_confirm=True,
+            parameters=_schema({
+                "path": {"type": "string", "description": "Caminho atual do arquivo/pasta."},
+                "new_name": {"type": "string", "description": "Novo nome, sem pastas."},
+            }, required=["path", "new_name"]),
         ))
 
         # Category 3: External (Internet)
@@ -204,6 +247,9 @@ class ToolRegistry:
         for key in ("path", "query", "expression", "url"):
             if params.get(key) is not None:
                 return str(params.get(key))
+        moves = params.get("moves")
+        if isinstance(moves, list):
+            return f"{len(moves)} item(ns) no plano"
         return "local"
 
     @staticmethod

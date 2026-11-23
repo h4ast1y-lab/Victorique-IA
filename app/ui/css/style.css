@@ -191,6 +191,18 @@ html[data-theme="dark"] .list-item.active { background: #34332f; }
 .memory-item .list-item-title { white-space: normal; }
 .memory-item.inactive { opacity: 0.55; }
 .empty-hint { color: var(--muted); font-size: 0.86em; padding: 10px; line-height: 1.5; }
+.pane-note { color: var(--muted); font-size: 0.8em; line-height: 1.5; padding: 0 6px 8px; }
+.pane-note code { font-size: 0.95em; }
+.operation-item { border-radius: 9px; padding: 2px 0; }
+.operation-item summary { display: flex; cursor: pointer; list-style: none; padding: 7px 10px; border-radius: 9px; color: var(--text-2); }
+.operation-item summary::-webkit-details-marker { display: none; }
+.operation-item summary:hover { background: var(--hover); color: var(--text); }
+.operation-item .op-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.operation-item.undone .op-title { text-decoration: line-through; color: var(--muted); }
+.op-steps { margin: 2px 10px 6px 28px; font-size: 0.78em; color: var(--text-2); line-height: 1.55; max-height: 160px; overflow: auto; }
+.op-steps li { word-break: break-all; }
+.op-undo { margin: 0 10px 8px; }
+.op-undo.armed { border-color: var(--warning); color: var(--warning); }
 
 .pane-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 4px 8px; }
 .pane-header h3 { font-size: 0.85em; color: var(--muted); font-weight: 600; }
@@ -426,6 +438,11 @@ html[data-response-font="serif"] .message.assistant .message-bubble { font-size:
 .auth-details summary { font-size: 0.8em; color: var(--muted); cursor: pointer; margin-top: 6px; }
 .auth-payload { margin-top: 6px; max-height: 160px; overflow: auto; font-size: 0.78em; background: var(--code-bg); border-radius: 8px; padding: 8px; white-space: pre-wrap; word-break: break-word; }
 .auth-actions { display: flex; gap: 6px; flex: none; }
+.auth-plan { margin: 8px 0 2px; padding: 8px 10px 8px 28px; max-height: 180px; overflow: auto; background: var(--code-bg); border-radius: 8px; font-size: 0.8em; line-height: 1.6; }
+.auth-plan li { word-break: break-all; }
+.auth-plan .plan-from { color: var(--text-2); }
+.auth-plan .plan-to { color: var(--text); font-weight: 600; }
+.auth-plan .plan-more { list-style: none; color: var(--muted); }
 
 /* ---------------- Buttons & form ---------------- */
 .btn {
@@ -588,3 +605,61 @@ kbd { font-size: 0.8em; padding: 2px 7px; border-radius: 6px; border: 1px solid 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ----------------- Portrait (state clips) ----------------- */
+.portrait { margin: 10px 2px 4px; }
+.portrait-frame {
+  position: relative; aspect-ratio: 16 / 10; border-radius: 12px; overflow: hidden;
+  background: radial-gradient(120% 90% at 30% 20%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%), var(--surface-2);
+  border: 1px solid var(--border);
+  transition: border-color .3s, filter .6s;
+}
+.portrait-frame video, .portrait-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.portrait-fallback { position: absolute; inset: 0; display: grid; place-items: center; }
+.portrait-frame video:not([hidden]) ~ .portrait-fallback,
+.portrait-frame img:not([hidden]) ~ .portrait-fallback { display: none; }
+.portrait-mark {
+  width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--font-serif, Georgia, serif); font-size: 28px; color: #fff; background: var(--accent);
+  transition: transform .6s, opacity .6s;
+}
+.portrait figcaption { display: flex; align-items: center; gap: 7px; font-size: 0.78em; color: var(--muted); padding: 6px 4px 0; }
+.portrait-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+
+.portrait[data-state="acordada"] .portrait-dot { background: var(--accent); }
+.portrait[data-state="dormindo"] .portrait-frame { filter: saturate(.55) brightness(.75); }
+.portrait[data-state="dormindo"] .portrait-mark { transform: rotate(-14deg) scale(.92); opacity: .7; }
+.portrait[data-state="ouvindo"] .portrait-frame { border-color: var(--accent); }
+.portrait[data-state="ouvindo"] .portrait-dot { background: var(--accent); animation: blink 1s infinite ease-in-out both; }
+.portrait[data-state="pensando"] .portrait-dot { background: var(--warning); }
+.portrait[data-state="falando"] .portrait-dot { background: var(--success, #4f9f78); }
+.portrait[data-state="falando"] .portrait-mark { animation: speak 1.1s infinite ease-in-out; }
+.portrait[data-state="erro"] .portrait-frame { border-color: var(--danger, #d65c5c); }
+.portrait[data-state="erro"] .portrait-dot { background: var(--danger, #d65c5c); }
+
+/* The pipe: shown while she thinks, over the clip or the static portrait. */
+.pipe { width: 48px; height: 48px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.pipe .pipe-bowl { fill: currentColor; stroke: none; }
+.pipe .pipe-smoke { stroke-width: 1.6; opacity: 0; animation: smoke 2.4s infinite ease-out; }
+.pipe .s2 { animation-delay: .8s; }
+.pipe .s3 { animation-delay: 1.6s; }
+.portrait .pipe {
+  position: absolute; right: 10px; bottom: 6px; width: 62px; height: 62px; color: #f3e6d0;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .6));
+  opacity: 0; transform: translateY(4px); transition: opacity .4s, transform .4s;
+}
+.portrait[data-state="pensando"] .pipe { opacity: 1; transform: none; }
+.thinking .pipe { width: 22px; height: 22px; color: var(--accent); stroke-width: 2.6; }
+
+@keyframes smoke {
+  0% { opacity: 0; transform: translateY(4px); }
+  30% { opacity: .85; }
+  100% { opacity: 0; transform: translateY(-6px); }
+}
+@keyframes speak { 50% { transform: scale(1.06); } }
+
+/* ----------------- Casos arquivados ----------------- */
+.archived-cases { margin-top: 10px; }
+.archived-cases summary { font-size: 0.82em; color: var(--muted); cursor: pointer; padding: 6px 6px; border-radius: 8px; }
+.archived-cases summary:hover { color: var(--text); }
+.list-item.archived .list-item-title { color: var(--muted); }

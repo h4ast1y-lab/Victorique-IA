@@ -41,6 +41,10 @@
       <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
       <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
       <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/></symbol>
+      <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></symbol>
+      <symbol id="i-unarchive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M12 18v-6M9.5 14.5L12 12l2.5 2.5"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></symbol>
+      <symbol id="i-shelves" viewBox="0 0 24 24"><path d="M3 21h18M3 12h18M3 3v18M21 3v18"/><path d="M6 12V6M9 12V5M13 12V7l3-1 1 6M6 21v-5M9 21v-6M14 21v-4"/></symbol>
       <symbol id="i-duplicate" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
     </defs>
   </svg>
@@ -62,11 +66,28 @@
           Nova conversa
         </button>
 
+        <figure class="portrait" id="portrait" data-state="acordada" hidden>
+          <div class="portrait-frame">
+            <video id="portraitVideo" muted loop playsinline hidden></video>
+            <img id="portraitImage" alt="" hidden>
+            <div class="portrait-fallback" id="portraitFallback"><span class="portrait-mark" id="portraitMark">V</span></div>
+            <svg class="pipe" viewBox="0 0 48 48" aria-hidden="true">
+              <path class="pipe-smoke s1" d="M31 21c-3-3 3-5 0-8s3-5 0-8"/>
+              <path class="pipe-smoke s2" d="M35 22c-2-3 2-4 0-7s2-4 0-6"/>
+              <path class="pipe-smoke s3" d="M27 22c-2-2 2-4 0-6s2-4 0-5"/>
+              <path class="pipe-stem" d="M3 29c9 0 15 1 21 3"/>
+              <path class="pipe-bowl" d="M23 24h14v8a7 7 0 0 1-14 0z"/>
+            </svg>
+          </div>
+          <figcaption><span class="portrait-dot"></span><span id="portraitState">Acordada</span></figcaption>
+        </figure>
+
         <nav class="side-nav" aria-label="Seções">
           <button class="nav-tab active" data-tab="conversations"><svg class="ic"><use href="#i-chat"/></svg>Conversas</button>
-          <button class="nav-tab" data-tab="projects"><svg class="ic"><use href="#i-folder"/></svg>Projetos</button>
+          <button class="nav-tab" data-tab="projects"><svg class="ic"><use href="#i-folder"/></svg>Casos</button>
           <button class="nav-tab" data-tab="library"><svg class="ic"><use href="#i-book"/></svg>Biblioteca</button>
           <button class="nav-tab" data-tab="memories"><svg class="ic"><use href="#i-bookmark"/></svg>Memórias</button>
+          <button class="nav-tab" data-tab="organizer"><svg class="ic"><use href="#i-shelves"/></svg>Organizador</button>
         </nav>
       </div>
 
@@ -81,10 +102,14 @@
 
         <div class="tab-pane" id="paneProjects">
           <div class="pane-header">
-            <h3>Projetos</h3>
-            <button class="chip-btn" id="btnCreateProject"><svg class="ic"><use href="#i-plus"/></svg>Novo</button>
+            <h3>Casos abertos</h3>
+            <button class="chip-btn" id="btnCreateProject"><svg class="ic"><use href="#i-plus"/></svg>Novo caso</button>
           </div>
           <div class="projects-list" id="projectsList"></div>
+          <details class="archived-cases" id="archivedCases" hidden>
+            <summary id="archivedSummary">Casos arquivados</summary>
+            <div class="projects-list" id="archivedList"></div>
+          </details>
         </div>
 
         <div class="tab-pane" id="paneLibrary">
@@ -101,6 +126,14 @@
             <button class="chip-btn" id="btnCreateMemory"><svg class="ic"><use href="#i-plus"/></svg>Adicionar</button>
           </div>
           <div class="memories-list" id="memoriesList"></div>
+        </div>
+
+        <div class="tab-pane" id="paneOrganizer">
+          <div class="pane-header">
+            <h3>Arquivos movidos</h3>
+          </div>
+          <p class="pane-note">Nada é apagado: descartes vão para a pasta <code>_Quarentena</code> (a Reserva). Cada lote pode ser desfeito aqui.</p>
+          <div class="operations-list" id="operationsList"></div>
         </div>
       </div>
 
@@ -151,6 +184,7 @@
             <div class="auth-info">
               <strong id="authTitle">Ação requer autorização</strong>
               <p id="authDesc">A assistente quer executar uma operação protegida.</p>
+              <ol class="auth-plan" id="authPlan" hidden></ol>
               <details class="auth-details">
                 <summary>Ver detalhes</summary>
                 <pre class="auth-payload" id="authPayload"></pre>
@@ -428,6 +462,15 @@
               <button type="button" data-value="serif">Serifada</button>
             </div>
           </div>
+          <div class="toggle-row">
+            <div><strong>Retrato animado</strong><small>Mostra a assistente na barra lateral, mudando conforme ela dorme, ouve, pensa ou fala.</small></div>
+            <input type="checkbox" class="switch" data-pref="show_portrait">
+          </div>
+          <div class="field">
+            <label for="prefIdle">Adormece depois de (minutos sem interação)</label>
+            <input type="number" id="prefIdle" data-pref="idle_minutes" min="1" max="120">
+          </div>
+          <div class="status-card" id="clipsInfo">Verificando clipes…</div>
         </section>
 
         <!-- Voz -->
@@ -474,28 +517,28 @@
   <div class="modal-backdrop" id="projectModal" hidden>
     <div class="modal">
       <div class="modal-header">
-        <h3 id="projectModalTitle">Novo projeto</h3>
+        <h3 id="projectModalTitle">Novo caso</h3>
         <button class="icon-btn" data-close="projectModal" aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button>
       </div>
       <div class="modal-body">
         <input type="hidden" id="projectId">
         <div class="field">
-          <label for="projectName">Nome do projeto</label>
+          <label for="projectName">Nome do caso</label>
           <input type="text" id="projectName" maxlength="120" placeholder="Ex.: Finanças pessoais">
         </div>
         <div class="field">
           <label for="projectDescription">Descrição</label>
-          <textarea id="projectDescription" rows="2" placeholder="Objetivo do projeto"></textarea>
+          <textarea id="projectDescription" rows="2" placeholder="O mistério a resolver"></textarea>
         </div>
         <div class="field">
-          <label for="projectInstructions">Instruções do projeto</label>
-          <textarea id="projectInstructions" rows="4" placeholder="Como a assistente deve agir neste projeto"></textarea>
+          <label for="projectInstructions">Dossiê (instruções do caso)</label>
+          <textarea id="projectInstructions" rows="4" placeholder="Como a assistente deve agir neste caso"></textarea>
         </div>
-        <p class="hint">Cada projeto tem conversas, memórias e documentos separados. Excluir um projeto remove as memórias e os documentos dele.</p>
+        <p class="hint">Cada caso tem conversas (autos), memórias e documentos (provas) separados. Arquivar guarda tudo; excluir remove as memórias e os documentos dele.</p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-close="projectModal">Cancelar</button>
-        <button class="btn btn-primary" id="btnSaveProject">Salvar projeto</button>
+        <button class="btn btn-primary" id="btnSaveProject">Salvar caso</button>
       </div>
     </div>
   </div>
@@ -515,7 +558,7 @@
             <option value="preference">Preferência</option>
             <option value="fact">Fato</option>
             <option value="decision">Decisão</option>
-            <option value="project">Projeto</option>
+            <option value="project">Caso</option>
             <option value="instruction">Instrução</option>
           </select>
         </div>
@@ -527,7 +570,7 @@
         <div class="field">
           <label for="memoryProject">Escopo</label>
           <select id="memoryProject">
-            <option value="">Global (todos os projetos)</option>
+            <option value="">Global (todos os casos)</option>
           </select>
         </div>
       </div>

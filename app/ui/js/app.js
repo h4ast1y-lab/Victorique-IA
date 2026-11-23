@@ -63,6 +63,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   checkHealth();
   loadModels();
   await initVoice();
+  initPortrait();
   authPollTimer = setInterval(checkPendingAuthorizations, 5000);
   setInterval(checkHealth, 30000);
 });
@@ -76,6 +77,7 @@ function setupEventListeners() {
       const paneId = `pane${tab.dataset.tab.charAt(0).toUpperCase() + tab.dataset.tab.slice(1)}`;
       const targetPane = $(paneId);
       if (targetPane) targetPane.classList.add('active');
+      if (tab.dataset.tab === 'organizer') loadOperations();
     });
   });
 
@@ -311,6 +313,7 @@ function applyAppearance() {
   messagesList.classList.toggle('hide-reasoning', prefs.show_reasoning === false);
   messagesList.classList.toggle('hide-tools', prefs.show_tool_events === false);
   $('suggestions').classList.toggle('on', prefs.show_suggestions !== false);
+  $('portrait').hidden = prefs.show_portrait === false;
   chatInput.placeholder = prefs.enter_to_send === false
     ? 'Escreva sua mensagem (Ctrl+Enter envia)'
     : `Pergunte qualquer coisa a ${activeProfileName()}`;
@@ -489,6 +492,9 @@ async function initVoice() {
 async function toggleVoiceListen() {
   if (!sttAvailable) { toast('Ditado indisponível.', 'error'); return; }
   btnVoiceListen.classList.add('listening');
+  visual.listening = true;
+  noteActivity();
+  refreshVisualState();
   btnVoiceListen.title = 'Ouvindo… fale agora';
   try {
     const data = await api('/api/stt/listen', {
@@ -507,6 +513,8 @@ async function toggleVoiceListen() {
     toast(`Erro no ditado: ${err.message}`, 'error');
   } finally {
     btnVoiceListen.classList.remove('listening');
+    visual.listening = false;
+    refreshVisualState();
     btnVoiceListen.title = 'Ditar pelo microfone';
   }
 }
@@ -516,6 +524,7 @@ async function speakText(text) {
   try {
     const data = await api('/api/tts/speak', { method: 'POST', body: { text, async_: true } });
     if (data.status !== 'speaking_async') toast('Leitura em voz alta indisponível.', 'error');
+    else markSpeaking(text);
   } catch (err) {
     toast(`Erro na leitura: ${err.message}`, 'error');
   }
@@ -634,6 +643,7 @@ function updateProfileUi() {
   $('profilePillName').textContent = p ? p.name : '—';
   $('welcomeAvatar').textContent = av;
   $('brandAvatar').textContent = av;
+  $('portraitMark').textContent = av;
   $('brandName').textContent = p ? p.name : 'Victorique';
   $('composerNote').textContent = `${p ? p.name : 'A assistente'} pode errar. Confira informações importantes.`;
   document.title = p ? p.name : 'Victorique';
@@ -1035,7 +1045,7 @@ async function sendMessage() {
   assistantMsgEl.classList.add('streaming');
   const body = assistantMsgEl.querySelector('.msg-body');
   const bubble = assistantMsgEl.querySelector('.message-bubble');
-  bubble.innerHTML = `<span class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span>${escape(activeProfileName())} está pensando…</span>`;
+  bubble.innerHTML = `<span class="thinking">${PIPE_SVG}${escape(activeProfileName())} está pensando…</span>`;
 
   const toolDetails = document.createElement('details');
   toolDetails.className = 'tool-events';
@@ -1050,6 +1060,10 @@ async function sendMessage() {
   body.insertBefore(citationsContainer, body.querySelector('.msg-actions'));
 
   isGenerating = true;
+  visual.generating = true;
+  visual.streaming = false;
+  noteActivity();
+  refreshVisualState();
   btnSend.hidden = true;
   btnStop.hidden = false;
   activeAbortController = new AbortController();
@@ -1159,6 +1173,7 @@ async function sendMessage() {
         } else if (data.type === 'notice') {
           appendToolEvent(toolBox, `${data.message}`, 'tool-event-notice');
         } else if (data.type === 'token') {
+          if (!visual.streaming) { visual.streaming = true; refreshVisualState(); }
           accumulated += data.content || '';
           bubble.innerHTML = md(accumulated);
           scrollToBottom(true);
@@ -1166,8 +1181,10 @@ async function sendMessage() {
           const errBox = document.createElement('div');
           errBox.className = 'stream-error';
           errBox.textContent = `Erro do modelo: ${data.message}`;
+          markVisualError();
           body.insertBefore(errBox, citationsContainer);
         } else if (data.type === 'done') {
+          refreshOrganizerIfOpen();
           if (data.conversation_id) currentConversationId = data.conversation_id;
           accumulated = data.content || accumulated;
           bubble.innerHTML = md(accumulated);
@@ -1184,9 +1201,14 @@ async function sendMessage() {
       body.insertBefore(note, citationsContainer);
     } else {
       bubble.innerHTML = `<p class="text-danger">Erro de comunicação: ${escape(err.message)}</p>`;
+      markVisualError();
     }
   } finally {
     isGenerating = false;
+    visual.generating = false;
+    visual.streaming = false;
+    if (accumulated && prefs.tts_speak_responses && ttsAvailable) markSpeaking(accumulated);
+    refreshVisualState();
     activeAbortController = null;
     assistantMsgEl.classList.remove('streaming');
     if (bubble.querySelector('.thinking')) bubble.innerHTML = '';
@@ -1346,6 +1368,7 @@ async function checkPendingAuthorizations(force = false) {
       authTitle.textContent = `Autorizar: ${act.description || String(act.action_type || 'ação protegida')}`;
       authDesc.textContent = `Alvo: ${act.resource || '—'} · expira ${act.expires_at_iso ? new Date(act.expires_at_iso).toLocaleTimeString('pt-BR') : '—'}`;
       authPayload.textContent = JSON.stringify(act.payload || {}, null, 2).slice(0, 3000);
+      renderAuthPlan(act.payload || {});
       authBar.hidden = false;
 
       btnApproveAction.onclick = () => resolveAuth(act.id, true, act.kind);
@@ -1358,6 +1381,121 @@ async function checkPendingAuthorizations(force = false) {
   }
 }
 
+// Moves shown as origem → destino, so the user approves the plan, not a JSON blob.
+function planSteps(payload) {
+  if (Array.isArray(payload.moves)) {
+    return payload.moves.map(m => [m.origem || m.src || '?', m.destino || m.dst || '?']);
+  }
+  if (Array.isArray(payload.paths)) return payload.paths.map(p => [p, 'Reserva (_Quarentena)']);
+  if (payload.path && payload.new_name) return [[payload.path, payload.new_name]];
+  return [];
+}
+
+function shortPath(path) {
+  const parts = String(path).split(/[\\/]+/).filter(Boolean);
+  return parts.length > 3 ? `…\\${parts.slice(-3).join('\\')}` : String(path);
+}
+
+function renderAuthPlan(payload) {
+  const list = $('authPlan');
+  list.innerHTML = '';
+  const steps = planSteps(payload);
+  list.hidden = steps.length === 0;
+  const MAX_STEPS = 40;
+  steps.slice(0, MAX_STEPS).forEach(([from, to]) => {
+    const li = document.createElement('li');
+    const a = document.createElement('span');
+    a.className = 'plan-from';
+    a.textContent = shortPath(from);
+    a.title = from;
+    const b = document.createElement('span');
+    b.className = 'plan-to';
+    b.textContent = shortPath(to);
+    b.title = to;
+    li.append(a, document.createTextNode(' → '), b);
+    list.appendChild(li);
+  });
+  if (steps.length > MAX_STEPS) {
+    const li = document.createElement('li');
+    li.className = 'plan-more';
+    li.textContent = `e mais ${steps.length - MAX_STEPS} item(ns); veja os detalhes.`;
+    list.appendChild(li);
+  }
+}
+
+// ----------------- Organizer (moves history, undo) -----------------
+const OPERATION_LABELS = { move: 'Movidos', rename: 'Renomeado', reserve: 'Na Reserva' };
+
+async function loadOperations() {
+  const list = $('operationsList');
+  try {
+    const batches = await api('/api/operations');
+    list.innerHTML = '';
+    if (!batches.length) {
+      const empty = document.createElement('p');
+      empty.className = 'empty-hint';
+      empty.textContent = 'Nenhum arquivo foi movido ainda. Peça à assistente para organizar uma pasta: ela mostra o plano e você aprova antes.';
+      list.appendChild(empty);
+      return;
+    }
+    batches.forEach(b => list.appendChild(operationItem(b)));
+  } catch (err) {
+    list.innerHTML = '';
+    toast(`Falha ao carregar o histórico: ${err.message}`, 'error');
+  }
+}
+
+function operationItem(batch) {
+  const item = document.createElement('details');
+  item.className = `operation-item ${batch.status === 'undone' ? 'undone' : ''}`;
+  const when = new Date(batch.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  const state = batch.status === 'undone' ? 'desfeito' : `${batch.ops.length} item(ns)`;
+  item.innerHTML = `
+    <summary>
+      <span class="list-item-title"><span class="op-title"></span><span class="list-sub"></span></span>
+    </summary>
+    <ol class="op-steps"></ol>`;
+  item.querySelector('.op-title').textContent = batch.description;
+  item.querySelector('.list-sub').textContent =
+    `${OPERATION_LABELS[batch.kind] || batch.kind} · ${state} · ${when}`;
+  const steps = item.querySelector('.op-steps');
+  batch.ops.forEach(op => {
+    const li = document.createElement('li');
+    li.textContent = `${shortPath(op.src)} → ${shortPath(op.dst)}`;
+    li.title = `${op.src}\n→ ${op.dst}`;
+    steps.appendChild(li);
+  });
+  if (batch.status !== 'undone') {
+    const btn = document.createElement('button');
+    btn.className = 'chip-btn op-undo';
+    btn.innerHTML = `${icon('undo')}Desfazer`;
+    // Two clicks: the first arms the button, the second puts everything back.
+    btn.addEventListener('click', async () => {
+      if (!btn.classList.contains('armed')) {
+        btn.classList.add('armed');
+        btn.innerHTML = `${icon('undo')}Devolver ${batch.ops.length} item(ns)?`;
+        setTimeout(() => {
+          if (btn.isConnected && btn.classList.contains('armed')) {
+            btn.classList.remove('armed');
+            btn.innerHTML = `${icon('undo')}Desfazer`;
+          }
+        }, 5000);
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const res = await api(`/api/operations/${batch.id}/undo`, { method: 'POST' });
+        toast(`Desfeito: ${res.restored} item(ns) voltaram ao lugar.`);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+      loadOperations();
+    });
+    item.appendChild(btn);
+  }
+  return item;
+}
+
 async function resolveAuth(actionId, approved, kind) {
   try {
     const data = await api('/api/security/authorize', {
@@ -1365,6 +1503,7 @@ async function resolveAuth(actionId, approved, kind) {
       body: { action_id: actionId, approved }
     });
     authBar.hidden = true;
+    if (approved) setTimeout(refreshOrganizerIfOpen, 1500);
     if (kind === 'claude_code') {
       // Claude Code runs (or skips) the tool itself; the open stream shows it.
     } else if (data.status === 'executed') {
@@ -1377,6 +1516,10 @@ async function resolveAuth(actionId, approved, kind) {
     toast(`Falha ao resolver autorização: ${err.message}`, 'error');
   }
   checkPendingAuthorizations(kind === 'claude_code');
+}
+
+function refreshOrganizerIfOpen() {
+  if ($('paneOrganizer').classList.contains('active')) loadOperations();
 }
 
 function renderToolResult(result) {
@@ -1472,7 +1615,7 @@ function openLibraryModal() {
 }
 
 // ----------------- Memories -----------------
-const MEMORY_LABELS = { preference: 'Preferência', fact: 'Fato', decision: 'Decisão', project: 'Projeto', instruction: 'Instrução' };
+const MEMORY_LABELS = { preference: 'Preferência', fact: 'Fato', decision: 'Decisão', project: 'Caso', instruction: 'Instrução' };
 
 async function loadMemories() {
   try {
@@ -1492,7 +1635,7 @@ async function loadMemories() {
     }
     const projectName = (id) => {
       const p = projectsCache.find(x => x.id === id);
-      return p ? p.name : 'projeto';
+      return p ? p.name : 'caso';
     };
 
     memories.forEach(m => {
@@ -1581,36 +1724,64 @@ async function saveMemory() {
 async function loadProjects() {
   try {
     projectsCache = await api('/api/projects');
+    const open = projectsCache.filter(p => !p.archived);
+    const archived = projectsCache.filter(p => p.archived);
     const list = $('projectsList');
     list.innerHTML = '';
-    if (!projectsCache.length) {
+    if (!open.length) {
       const empty = document.createElement('p');
       empty.className = 'empty-hint';
-      empty.textContent = 'Nenhum projeto. Crie um para separar conversas, memórias e documentos.';
+      empty.textContent = 'Nenhum caso aberto. Crie um para separar conversas, memórias e documentos de um assunto.';
       list.appendChild(empty);
     }
-    projectsCache.forEach(p => {
-      const item = document.createElement('div');
-      item.className = `list-item ${p.id === currentProjectId ? 'active' : ''}`;
-      item.dataset.projectId = p.id;
-      item.innerHTML = `
-        ${icon('folder')}
-        <span class="list-item-title"></span>
-        <span class="item-actions">
-          <button class="icon-btn" title="Editar projeto">${icon('pencil')}</button>
-          <button class="icon-btn danger" title="Excluir projeto">${icon('trash')}</button>
-        </span>`;
-      item.querySelector('.list-item-title').textContent = p.name;
-      item.title = p.id === currentProjectId ? 'Clique para sair do projeto' : 'Clique para entrar no projeto';
-      item.addEventListener('click', () => selectProject(p));
-      const [editBtn, delBtn] = item.querySelectorAll('button');
-      editBtn.addEventListener('click', (e) => { e.stopPropagation(); openProjectModal(p); });
-      delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteProject(p); });
-      list.appendChild(item);
-    });
+    open.forEach(p => list.appendChild(projectItem(p)));
+
+    const archivedList = $('archivedList');
+    archivedList.innerHTML = '';
+    archived.forEach(p => archivedList.appendChild(projectItem(p)));
+    $('archivedCases').hidden = archived.length === 0;
+    $('archivedSummary').textContent = `Casos arquivados (${archived.length})`;
     updateMemoryProjectOptions();
   } catch (err) {
     console.error('Failed to load projects', err);
+  }
+}
+
+function projectItem(p) {
+  const item = document.createElement('div');
+  item.className = `list-item ${p.id === currentProjectId ? 'active' : ''} ${p.archived ? 'archived' : ''}`;
+  item.dataset.projectId = p.id;
+  item.innerHTML = `
+    ${icon(p.archived ? 'archive' : 'folder')}
+    <span class="list-item-title"></span>
+    <span class="item-actions">
+      <button class="icon-btn" title="Editar caso">${icon('pencil')}</button>
+      <button class="icon-btn" title="${p.archived ? 'Reabrir caso' : 'Arquivar caso'}">${icon(p.archived ? 'unarchive' : 'archive')}</button>
+      <button class="icon-btn danger" title="Excluir caso">${icon('trash')}</button>
+    </span>`;
+  item.querySelector('.list-item-title').textContent = p.name;
+  item.title = p.id === currentProjectId ? 'Clique para sair do caso' : 'Clique para abrir o caso';
+  item.addEventListener('click', () => selectProject(p));
+  const [editBtn, archiveBtn, delBtn] = item.querySelectorAll('button');
+  editBtn.addEventListener('click', (e) => { e.stopPropagation(); openProjectModal(p); });
+  archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); archiveProject(p, !p.archived); });
+  delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteProject(p); });
+  return item;
+}
+
+async function archiveProject(project, archived) {
+  try {
+    await api(`/api/projects/${project.id}/archive`, { method: 'POST', body: { archived } });
+    if (archived && currentProjectId === project.id) {
+      currentProjectId = null;
+      updateProjectTag();
+      startNewChat();
+      await Promise.all([loadConversations(), loadDocuments(), loadMemories()]);
+    }
+    await loadProjects();
+    toast(archived ? `Caso "${project.name}" arquivado` : `Caso "${project.name}" reaberto`);
+  } catch (err) {
+    toast(`Falha: ${err.message}`, 'error');
   }
 }
 
@@ -1633,7 +1804,7 @@ function updateProjectTag() {
     return;
   }
   const p = projectsCache.find(x => x.id === currentProjectId);
-  tag.textContent = p ? p.name : 'Projeto';
+  tag.textContent = p ? p.name : 'Caso';
   tag.hidden = false;
   document.querySelectorAll('#projectsList .list-item').forEach((item) => {
     item.classList.toggle('active', item.dataset.projectId === currentProjectId);
@@ -1642,7 +1813,7 @@ function updateProjectTag() {
 
 function openProjectModal(project = null) {
   $('projectId').value = project ? project.id : '';
-  $('projectModalTitle').textContent = project ? 'Editar projeto' : 'Novo projeto';
+  $('projectModalTitle').textContent = project ? 'Editar caso' : 'Novo caso';
   $('projectName').value = project ? project.name : '';
   $('projectDescription').value = project ? (project.description || '') : '';
   $('projectInstructions').value = project ? (project.instructions || '') : '';
@@ -1657,7 +1828,7 @@ async function saveProject() {
     description: $('projectDescription').value,
     instructions: $('projectInstructions').value,
   };
-  if (!payload.name) { toast('Informe o nome do projeto.', 'error'); return; }
+  if (!payload.name) { toast('Informe o nome do caso.', 'error'); return; }
 
   try {
     if (id) {
@@ -1670,28 +1841,28 @@ async function saveProject() {
     await loadProjects();
     updateProjectTag();
     if (!id) { startNewChat(); await Promise.all([loadConversations(), loadDocuments(), loadMemories()]); }
-    toast('Projeto salvo');
+    toast('Caso salvo');
   } catch (err) {
-    toast(`Falha ao salvar projeto: ${err.message}`, 'error');
+    toast(`Falha ao salvar o caso: ${err.message}`, 'error');
   }
 }
 
 async function deleteProject(project) {
-  const warning = 'Excluir o projeto "' + project.name + '"?\n\nIsso remove também memórias e documentos vinculados. Conversas ficam sem projeto. Esta ação não pode ser desfeita (faça um backup antes).';
+  const warning = 'Excluir o caso "' + project.name + '"?\n\nIsso remove também memórias e documentos vinculados. Conversas ficam sem caso. Esta ação não pode ser desfeita (faça um backup antes). Para só guardar o caso, use Arquivar.';
   if (!confirm(warning)) return;
   try {
     await api(`/api/projects/${project.id}`, { method: 'DELETE' });
     if (currentProjectId === project.id) { currentProjectId = null; updateProjectTag(); startNewChat(); }
     await Promise.all([loadProjects(), loadMemories(), loadDocuments(), loadConversations()]);
-    toast('Projeto excluído');
+    toast('Caso excluído');
   } catch (err) {
-    toast(`Falha ao excluir projeto: ${err.message}`, 'error');
+    toast(`Falha ao excluir o caso: ${err.message}`, 'error');
   }
 }
 
 function updateMemoryProjectOptions(selected = null) {
   const select = $('memoryProject');
-  select.innerHTML = '<option value="">Global (todos os projetos)</option>';
+  select.innerHTML = '<option value="">Global (todos os casos)</option>';
   projectsCache.forEach(p => {
     const opt = document.createElement('option');
     opt.value = p.id;
@@ -1831,3 +2002,136 @@ window.assistantApp = {
   startNewChat, sendMessage, abortGeneration, openLibraryModal,
   openProjectModal, openMemoryModal, checkPendingAuthorizations, openSettingsModal
 };
+
+
+// ----------------- Portrait: one clip per state -----------------
+// Clips come from data/clips/<estado>/ (supplied by the user, never downloaded).
+// Without a clip for a state, the "acordada" clip is used; without any, the
+// static portrait. Priority: ouvindo > pensando > falando > erro > dormindo.
+const PIPE_SVG = `<svg class="pipe" viewBox="0 0 48 48" aria-hidden="true">
+  <path class="pipe-smoke s1" d="M31 21c-3-3 3-5 0-8s3-5 0-8"/>
+  <path class="pipe-smoke s2" d="M35 22c-2-3 2-4 0-7s2-4 0-6"/>
+  <path class="pipe-smoke s3" d="M27 22c-2-2 2-4 0-6s2-4 0-5"/>
+  <path class="pipe-stem" d="M3 29c9 0 15 1 21 3"/>
+  <path class="pipe-bowl" d="M23 24h14v8a7 7 0 0 1-14 0z"/></svg>`;
+const STATE_LABELS = {
+  acordada: 'Acordada', dormindo: 'Cochilando entre os livros', ouvindo: 'Ouvindo',
+  pensando: 'Pensando', falando: 'Falando', erro: 'Algo deu errado',
+};
+const ERROR_HOLD_MS = 60000;
+const visual = {
+  state: null, clips: {}, generating: false, streaming: false, listening: false,
+  speakingUntil: 0, errorAt: 0, lastActivity: Date.now(),
+};
+
+function computeVisualState() {
+  const now = Date.now();
+  if (visual.listening) return 'ouvindo';
+  if (visual.generating && !visual.streaming) return 'pensando';
+  if (visual.streaming || visual.speakingUntil > now) return 'falando';
+  if (visual.errorAt && now - visual.errorAt < ERROR_HOLD_MS) return 'erro';
+  const idleMs = (prefs.idle_minutes || 5) * 60000;
+  if (now - visual.lastActivity > idleMs) return 'dormindo';
+  return 'acordada';
+}
+
+function refreshVisualState() {
+  const state = computeVisualState();
+  if (state === visual.state) return;
+  visual.state = state;
+  $('portrait').dataset.state = state;
+  $('portraitState').textContent = STATE_LABELS[state];
+  showClip(state);
+}
+
+function pickClip(state) {
+  const own = visual.clips[state] || [];
+  const list = own.length ? own : (visual.clips.acordada || []);
+  if (!list.length) return null;
+  const clip = list[Math.floor(Math.random() * list.length)];
+  return { ...clip, state: own.length ? state : 'acordada' };
+}
+
+function showClip(state) {
+  const video = $('portraitVideo');
+  const image = $('portraitImage');
+  const clip = pickClip(state);
+  const src = clip ? `/api/clips/${clip.state}/${encodeURIComponent(clip.name)}` : '';
+  if (clip && clip.kind === 'video') {
+    image.hidden = true;
+    image.removeAttribute('src');
+    if (video.dataset.src !== src) {
+      video.dataset.src = src;
+      video.src = src;
+    }
+    video.hidden = false;
+    video.play().catch(() => {});
+    return;
+  }
+  video.pause();
+  video.hidden = true;
+  video.removeAttribute('src');
+  video.dataset.src = '';
+  if (clip) {
+    image.src = src;
+    image.hidden = false;
+  } else {
+    image.hidden = true;
+    image.removeAttribute('src');
+  }
+}
+
+function noteActivity() {
+  visual.lastActivity = Date.now();
+  if (visual.errorAt && !isGenerating) visual.errorAt = 0;
+  if (visual.state === 'dormindo' || visual.state === 'erro') refreshVisualState();
+}
+
+function markVisualError() {
+  visual.errorAt = Date.now();
+  refreshVisualState();
+}
+
+// The server speaks in the background; estimate how long (about 14 chars/s).
+function markSpeaking(text) {
+  const seconds = Math.min(90, Math.max(2, String(text).length / 14));
+  visual.speakingUntil = Date.now() + seconds * 1000;
+  refreshVisualState();
+  setTimeout(refreshVisualState, seconds * 1000 + 50);
+}
+
+async function loadClips() {
+  try {
+    const data = await api('/api/clips');
+    visual.clips = data.states || {};
+    const total = Object.values(visual.clips).reduce((n, list) => n + list.length, 0);
+    const info = $('clipsInfo');
+    info.innerHTML = '';
+    const line = document.createElement('div');
+    line.textContent = total
+      ? `${total} clipe(s) encontrados. Para trocar, edite as pastas e reabra o app.`
+      : 'Nenhum clipe ainda: o retrato usa a imagem estática.';
+    const where = document.createElement('div');
+    where.className = 'hint';
+    where.append('Coloque vídeos (.mp4, .webm) ou imagens numa subpasta por estado (');
+    const states = document.createElement('code');
+    states.textContent = Object.keys(STATE_LABELS).join(', ');
+    const dir = document.createElement('code');
+    dir.textContent = data.dir;
+    where.append(states, ') dentro de ', dir, '.');
+    info.append(line, where);
+  } catch (err) {
+    visual.clips = {};
+  }
+  visual.state = null;
+  refreshVisualState();
+}
+
+function initPortrait() {
+  ['pointerdown', 'keydown', 'wheel'].forEach(evt =>
+    document.addEventListener(evt, noteActivity, { passive: true }));
+  // Broken or unsupported file: fall back to the static portrait.
+  $('portraitVideo').addEventListener('error', () => { $('portraitVideo').hidden = true; });
+  setInterval(refreshVisualState, 15000);
+  loadClips();
+}

@@ -27,6 +27,8 @@ COLUMN_MIGRATIONS = [
     # Profile customization: avatar (emoji or initials) and emoji usage 1-3.
     ("personalities", "avatar", "TEXT"),
     ("personalities", "emoji_level", "INTEGER DEFAULT 2"),
+    # Casos (projects) can be archived instead of deleted.
+    ("projects", "archived", "INTEGER DEFAULT 0"),
 ]
 
 

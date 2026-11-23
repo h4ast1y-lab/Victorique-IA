@@ -234,3 +234,16 @@ def test_settings_model_validation(client):
     ok = client.post("/api/settings", json={"default_model": "qwen2.5-coder:7b"})
     assert ok.status_code == 200
     assert client.get("/api/settings").json()["default_model"] == "qwen2.5-coder:7b"
+
+
+def test_cases_can_be_archived_and_reopened(client):
+    case = client.post("/api/projects", json={"name": "Caso do Relógio"}).json()
+    assert case["archived"] == 0
+    res = client.post(f"/api/projects/{case['id']}/archive", json={"archived": True})
+    assert res.status_code == 200 and res.json()["status"] == "archived"
+    listed = {p["id"]: p for p in client.get("/api/projects").json()}
+    assert listed[case["id"]]["archived"] == 1
+    client.post(f"/api/projects/{case['id']}/archive", json={"archived": False})
+    listed = {p["id"]: p for p in client.get("/api/projects").json()}
+    assert listed[case["id"]]["archived"] == 0
+    assert client.post("/api/projects/nao-existe/archive", json={"archived": True}).status_code == 404

@@ -63,6 +63,14 @@ class ProjectStore:
             )
             return cur.rowcount > 0
 
+    def set_archived(self, project_id: str, archived: bool) -> bool:
+        with get_connection() as conn:
+            cur = conn.execute(
+                "UPDATE projects SET archived = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (1 if archived else 0, project_id),
+            )
+            return cur.rowcount > 0
+
     def delete_project(self, project_id: str) -> bool:
         with get_connection() as conn:
             files = [

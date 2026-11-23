@@ -1,4 +1,3 @@
-import shutil
 from pathlib import Path
 from typing import Dict, Any
 from app.security.path_guard import path_guard
@@ -115,25 +114,19 @@ def create_directory(path: str) -> Dict[str, Any]:
 
 
 def delete_file(path: str, recursive: bool = False) -> Dict[str, Any]:
+    """Never erases: the item goes to the Reserva (_Quarentena) and can be restored."""
+    from app.tools import organizer  # lazy: organizer imports config/path_guard
+
     resolved = path_guard.validate_and_resolve(path, must_exist=True, for_write=True)
-    if resolved.is_file():
-        path_guard.validate_and_resolve(str(resolved), must_exist=True, for_write=True)
-        resolved.unlink()
-        return {"deleted_path": str(resolved), "status": "deleted"}
-
-    if resolved.is_dir():
-        if not recursive:
-            try:
-                next(resolved.iterdir())
-            except StopIteration:
-                resolved.rmdir()
-                return {"deleted_path": str(resolved), "status": "deleted"}
-            raise PermissionError(
-                "O diretório não está vazio. Para exclusão recursiva, envie 'recursive': true "
-                "e aprove explicitamente a autorização."
-            )
-        path_guard.validate_and_resolve(str(resolved), must_exist=True, for_write=True)
-        shutil.rmtree(resolved)
-        return {"deleted_path": str(resolved), "status": "deleted", "recursive": True}
-
-    raise FileNotFoundError(f"Caminho não encontrado: '{path}'")
+    if resolved.is_dir() and not recursive and any(resolved.iterdir()):
+        raise PermissionError(
+            "A pasta não está vazia. Para enviá-la inteira à Reserva, envie 'recursive': true."
+        )
+    result = organizer.send_to_reserve([str(resolved)], f"Descartar {resolved.name}")
+    return {
+        "original_path": str(resolved),
+        "reserve_path": result["ops"][0]["dst"],
+        "status": "moved_to_reserve",
+        "batch_id": result["batch_id"],
+        "note": "Nada foi apagado: o item está na Reserva (_Quarentena) e pode ser restaurado com Desfazer.",
+    }

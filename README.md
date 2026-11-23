@@ -240,8 +240,15 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 - **Caminhos**: validação imediata antes da operação, com `resolve()` para seguir
   symlinks/junctions; bloqueio de `..`, caminhos absolutos/UNC fora da whitelist.
 - **Caminhos protegidos**: código do app, `.venv`, banco, `data/` e backups não podem
-  ser escritos/apagados por ferramentas. Exclusão recursiva exige `recursive: true` e
-  autorização específica.
+  ser escritos nem movidos por ferramentas. Pastas do Windows (`C:\Windows`, `Program Files`,
+  `ProgramData`, `AppData`) também ficam fora de alcance para escrita; só a pasta temporária
+  do sistema é exceção.
+- **Nada é apagado**: `delete_file` manda o item para a Reserva (`_Quarentena/<data-hora>/`)
+  dentro da pasta autorizada. Mover (`move_files`), renomear (`rename_file`) e descartar
+  pedem aprovação sempre, mesmo no modo turbo; a barra de autorização mostra o plano
+  origem → destino. Um lote é validado inteiro antes (destino existente nunca é
+  sobrescrito) e, se falhar no meio, o que já foi movido volta. Cada lote fica em
+  `data/operations.json` e pode ser desfeito no painel **Organizador**.
 - **Origem/Host**: requisições com `Origin` externo recebem 403; `Host` diferente de
   localhost/127.0.0.1 recebe 400 (mitiga DNS rebinding).
 - **Conteúdo não confiável**: documentos/páginas são tratados como dados; o prompt
@@ -282,7 +289,9 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 | Personalidade configurável | implementado; testado (edição sem duplicar perfil) |
 | Histórico e persistência | implementado; testado após reinício |
 | Memórias explícitas (global/projeto), editar/desativar/excluir | implementado; testado |
-| Projetos independentes + exclusão em cascata | implementado; testado (inclui remoção do arquivo) |
+| Casos (antes Projetos) independentes, com arquivamento, + exclusão em cascata | implementado; testado (inclui remoção do arquivo) |
+| Organizador: mover em lote, renomear, Reserva e Desfazer | implementado; testado automaticamente e no navegador |
+| Retrato com clipes por estado (acordada, dormindo, ouvindo, pensando, falando, erro) | implementado; clipes do usuário em `data/clips/<estado>/` (mp4, webm, gif, png, jpg, webp); sem clipe, retrato estático; cachimbo no estado pensando |
 | RAG PDF/TXT/MD com documento/página | implementado; testado com embeddings reais |
 | Isolamento por projeto (conversas, memórias, documentos, RAG) | implementado; testado automaticamente e no E2E |
 | Referências às fontes | implementado; testado |

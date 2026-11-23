@@ -60,7 +60,7 @@ class ContextBuilder:
             proj = project_store.get_project(project_id)
             if proj:
                 system_parts.append(
-                    f"\nPROJETO ATIVO: '{proj['name']}'\nDescrição: {proj.get('description', '')}\nDiretrizes do Projeto: {proj.get('instructions', '')}"
+                    f"\nCASO ATIVO: '{proj['name']}'\nDescrição: {proj.get('description', '')}\nDossiê do caso (instruções): {proj.get('instructions', '')}"
                 )
 
         # 3. Persistent Memories (global + project-specific, explicitly created by the user)

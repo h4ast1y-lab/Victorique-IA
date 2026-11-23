@@ -49,7 +49,14 @@ RESUME_NOTICE = (
 )
 TOOLS_NOTE = (
     "FERRAMENTAS DA VICTORIQUE: use buscar_memorias para as preferências e fatos que o "
-    "usuário salvou no app, e buscar_documentos para os documentos que ele indexou. "
+    "usuário salvou no app, e buscar_documentos para os documentos que ele indexou.\n"
+    "ORGANIZAR ARQUIVOS (a Biblioteca): para mover, renomear ou descartar arquivos do usuário, "
+    "use SEMPRE mover_arquivos, renomear e mandar_para_reserva, nunca Bash, Write ou comandos "
+    "de apagar. Antes, leia as pastas (Read, Glob, Grep), monte o plano completo origem → "
+    "destino e mostre-o ao usuário; depois chame mover_arquivos com o plano inteiro de uma vez "
+    "(o usuário aprova na barra de autorização). Nada se apaga: descartes vão para a Reserva "
+    "(_Quarentena) e o usuário pode desfazer pelo Organizador. Pastas do sistema (Windows, "
+    "Program Files, AppData) são proibidas.\n"
     "Responda sempre em português do Brasil."
 )
 
@@ -73,9 +80,9 @@ def build_append_prompt(project_id: Optional[str], personality_id: Optional[str]
         project = project_store.get_project(project_id)
         if project:
             parts.append(
-                f"PROJETO ATIVO: '{project['name']}'\n"
+                f"CASO ATIVO: '{project['name']}'\n"
                 f"Descrição: {project.get('description', '')}\n"
-                f"Diretrizes do Projeto: {project.get('instructions', '')}"
+                f"Dossiê do caso (instruções): {project.get('instructions', '')}"
             )
     parts.append(TOOLS_NOTE)
     return "\n\n".join(parts)

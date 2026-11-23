@@ -1,7 +1,31 @@
 import os
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 from app.config import settings, BASE_DIR, DATA_DIR, BACKUPS_DIR, DB_PATH
+
+
+def _system_dirs() -> List[Path]:
+    r"""Windows system folders the assistant never writes to (C:\Windows, Program Files, AppData...)."""
+    names = ("SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+             "ProgramData", "APPDATA", "LOCALAPPDATA")
+    found = []
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            found.append(Path(value))
+    if os.name == "nt":
+        found += [Path("C:/Windows"), Path("C:/Program Files"), Path("C:/Program Files (x86)"),
+                  Path("C:/ProgramData")]
+    unique = []
+    for path in found:
+        try:
+            resolved = path.expanduser().resolve()
+        except Exception:
+            continue
+        if resolved not in unique:
+            unique.append(resolved)
+    return unique
 
 class PathGuard:
     """
@@ -21,6 +45,9 @@ class PathGuard:
             for p in (authorized_directories or settings.authorized_directories)
         ]
         self.protected_write_paths = self._default_protected_paths()
+        self.system_dirs = _system_dirs()
+        # Temp files live under AppData\Local\Temp; they stay writable.
+        self.temp_dir = Path(tempfile.gettempdir()).resolve()
 
     def _default_protected_paths(self) -> List[Path]:
         protected = [
@@ -77,7 +104,13 @@ class PathGuard:
         for protected in self.protected_write_paths:
             if self._is_within(resolved, protected):
                 return True
-        return False
+        return self.is_system_path(resolved)
+
+    def is_system_path(self, target: Path) -> bool:
+        """True inside Windows, Program Files, ProgramData or AppData (temp excluded)."""
+        if self._is_within(target, self.temp_dir):
+            return False
+        return any(self._is_within(target, d) for d in self.system_dirs)
 
     def validate_and_resolve(
         self,
@@ -99,7 +132,7 @@ class PathGuard:
             )
         if for_write and self.is_protected(str(resolved)):
             raise PermissionError(
-                f"Acesso Negado: '{resolved}' é um caminho protegido (código do aplicativo, banco ou backups)."
+                f"Acesso Negado: '{resolved}' é um caminho protegido (sistema do Windows ou código, banco e backups do aplicativo)."
             )
         if must_exist and not resolved.exists():
             raise FileNotFoundError(f"Arquivo ou diretório não encontrado: '{target_path}'")

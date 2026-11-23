@@ -18,7 +18,7 @@ from app.memory.conversation_store import conversation_store
 from app.memory.memory_store import memory_store
 from app.memory.project_store import project_store
 from app.core.personality import personality_manager
-from app.core import preferences
+from app.core import preferences, clips
 from app.core.sse import sse_event
 from app.core.assistant import assistant_engine
 from app.core.backup import create_backup, list_backups, backup_path, restore_backup
@@ -29,11 +29,13 @@ from app.rag.vector_store import vector_store
 from app.rag.document_loader import document_loader
 from app.security.permissions import security_manager
 from app.tools.registry import tool_registry
+from app.tools import organizer
 from app.voice import tts_engine, stt_engine
 
 # Initialize database schema on startup
 init_db()
 preferences.apply_to_settings()
+clips.ensure_dirs()
 
 
 app = FastAPI(title=settings.app_name, version=settings.version)
@@ -142,6 +144,9 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     instructions: Optional[str] = None
+
+class ProjectArchive(BaseModel):
+    archived: bool = True
 
 class AuthorizeActionRequest(BaseModel):
     action_id: str
@@ -692,7 +697,7 @@ async def get_projects():
 @app.post("/api/projects")
 async def create_project(req: ProjectCreate):
     if not req.name.strip():
-        raise HTTPException(status_code=400, detail="Nome do projeto vazio.")
+        raise HTTPException(status_code=400, detail="Nome do caso vazio.")
     return project_store.create_project(
         name=req.name[:120],
         description=req.description or "",
@@ -710,6 +715,12 @@ async def update_project(proj_id: str, req: ProjectUpdate):
     if not ok:
         raise HTTPException(status_code=404, detail="Projeto não encontrado")
     return {"status": "updated"}
+
+@app.post("/api/projects/{proj_id}/archive")
+async def archive_project(proj_id: str, req: ProjectArchive):
+    if not project_store.set_archived(proj_id, req.archived):
+        raise HTTPException(status_code=404, detail="Caso não encontrado")
+    return {"status": "archived" if req.archived else "reopened"}
 
 @app.delete("/api/projects/{proj_id}")
 async def delete_project(proj_id: str):
@@ -830,6 +841,31 @@ async def authorize_action(req: AuthorizeActionRequest):
     if status == "tampered":
         raise HTTPException(status_code=409, detail="Parâmetros divergentes. Ação bloqueada.")
     raise HTTPException(status_code=400, detail="Não foi possível resolver a autorização.")
+
+# ----------------- Portrait clips (user-supplied, per state) -----------------
+@app.get("/api/clips")
+async def get_clips():
+    return {"dir": str(clips.CLIPS_DIR), "states": clips.list_clips()}
+
+@app.get("/api/clips/{state}/{name}")
+async def get_clip(state: str, name: str):
+    path = clips.clip_path(state, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Clipe não encontrado.")
+    return FileResponse(str(path))
+
+# ----------------- Organizer (history of moves, undo) -----------------
+@app.get("/api/operations")
+async def get_operations(limit: int = 50):
+    return organizer.list_batches(limit=min(max(limit, 1), 300))
+
+@app.post("/api/operations/{batch_id}/undo")
+async def undo_operation(batch_id: str):
+    # Only the user reaches this, from the Organizer panel; the model has no undo tool.
+    try:
+        return await asyncio.to_thread(organizer.undo, batch_id)
+    except (ValueError, FileExistsError, FileNotFoundError, PermissionError) as e:
+        raise HTTPException(status_code=409, detail=f"Não foi possível desfazer: {e}")
 
 @app.post("/api/tools/execute")
 async def execute_tool(req: ToolExecuteRequest):
