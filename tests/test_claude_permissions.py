@@ -113,3 +113,23 @@ async def test_decisions_are_audited(tmp_path):
             (str(tmp_path / "audit.txt"),),
         ).fetchone()
     assert row["authorized"] == 1
+
+
+@pytest.mark.asyncio
+async def test_turbo_auto_approves_writes_but_not_protected(tmp_path, monkeypatch):
+    """Turbo = acceptEdits semantics, but the protected-path guard still applies."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "turbo_mode", True)
+    bridge = Recorder()
+    result = await bridge.can_use_tool("Write", {"file_path": str(tmp_path / "t.txt")}, None)
+    assert isinstance(result, PermissionResultAllow)
+    assert bridge.emitted == []
+    protected = await bridge.can_use_tool(
+        "Write", {"file_path": str(BASE_DIR / "app" / "main.py")}, None
+    )
+    assert isinstance(protected, PermissionResultDeny)
+    # Commands still ask, like acceptEdits.
+    task = await _ask(bridge, "Bash", {"command": "dir"})
+    assert bridge.emitted and bridge.emitted[0]["tool_name"] == "Bash"
+    bridge.cancel_pending()
+    await task

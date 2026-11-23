@@ -12,22 +12,13 @@ from app.tools.registry import tool_registry
 from app.config import settings, DEFAULT_LLAMA_CPP_MODEL
 from app.voice import tts_engine
 from app.models.events import ReasoningDelta
+from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
 
 logger = logging.getLogger("assistant")
 
-CANCELLED_MARKER = "\n\n_[Geração interrompida pelo usuário.]_"
-NO_TEXT_FALLBACK = "_(O modelo não retornou texto nesta resposta.)_"
 TOOL_TRACE_RESULT_CHARS = 1500
-
-
-def _event(payload: Dict[str, Any]) -> str:
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-def _truncate(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + f"\n...[truncado; {len(text)} caracteres no total]"
+_event = sse_event
+_truncate = truncate
 
 
 def _tools_unsupported(exc: Exception) -> bool:

@@ -63,6 +63,18 @@ class PermissionBridge:
                         "Não é permitido alterá-lo."
                     )
                 )
+            if settings.turbo_mode:
+                # Turbo = acceptEdits semantics. Done here instead of via
+                # permission_mode="acceptEdits", which would bypass this callback
+                # and with it the protected-path guard above.
+                security_manager.log_action(
+                    action_type=tool_name,
+                    category=ActionCategory.REQUIRES_AUTH,
+                    resource=target,
+                    authorized=True,
+                    details="Claude Code: aprovado automaticamente (modo turbo)",
+                )
+                return PermissionResultAllow(updated_input=input_data)
 
         description = f"Claude Code quer usar {tool_name}."
         action_id, future = security_manager.create_waiting_request(
