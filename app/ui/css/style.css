@@ -330,6 +330,25 @@ body, html {
   border: 1px solid rgba(210, 153, 34, 0.3);
 }
 
+.tag-claude {
+  background-color: rgba(217, 119, 87, 0.15);
+  color: #e3906f;
+  border: 1px solid rgba(217, 119, 87, 0.4);
+}
+
+.tag[hidden] {
+  display: none;
+}
+
+.mode-select {
+  background-color: var(--bg-tertiary);
+  color: inherit;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 /* Messages Container */
 .messages-container {
   flex: 1;

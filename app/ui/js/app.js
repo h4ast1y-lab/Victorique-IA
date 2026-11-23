@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupSliders();
   await checkHealth();
   await loadModels();
+  await loadBackendMode();
   await loadProjects();
   await loadConversations();
   await loadDocuments();
@@ -63,6 +64,8 @@ function setupEventListeners() {
       if (targetPane) targetPane.classList.add('active');
     });
   });
+
+  $('modeSelect').addEventListener('change', (e) => changeBackend(e.target.value));
 
   chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -358,6 +361,39 @@ async function changeModel(name) {
   }
 }
 
+// ----------------- Mode (local / Claude Code) -----------------
+let currentBackend = null;
+
+async function loadBackendMode() {
+  try {
+    const cfg = await api('/api/settings');
+    currentBackend = cfg.default_backend;
+    updateModeUi();
+  } catch (err) {
+    console.error('Failed to load mode', err);
+  }
+}
+
+async function changeBackend(value) {
+  try {
+    await api('/api/settings', { method: 'POST', body: { default_backend: value } });
+    currentBackend = value;
+    updateModeUi();
+    await checkHealth();
+  } catch (err) {
+    alert(`Não foi possível trocar o modo: ${err.message}`);
+    updateModeUi();
+  }
+}
+
+function updateModeUi() {
+  const isClaude = currentBackend === 'claude-code';
+  // llama-cpp-server is the same local engine as llama-cpp in the selector.
+  $('modeSelect').value = currentBackend === 'llama-cpp-server' ? 'llama-cpp' : (currentBackend || 'llama-cpp');
+  $('claudeBadge').hidden = !isClaude;
+  $('activeModelTag').hidden = isClaude;
+}
+
 function updateModelTag() {
   const tag = $('activeModelTag');
   if (!selectedModel) { tag.textContent = '—'; return; }
@@ -488,6 +524,7 @@ async function sendMessage() {
         conversation_id: currentConversationId,
         message: text,
         model: selectedModel || undefined,
+        backend: currentBackend || undefined,
         project_id: currentProjectId,
         personality_id: currentPersonalityId,
         enable_rag: true,

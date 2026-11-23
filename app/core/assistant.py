@@ -274,6 +274,21 @@ class AssistantEngine:
             content=user_message
         )
 
+        if (backend or "").strip().lower() == "claude-code":
+            # Lazy: local modes must keep working without the Agent SDK.
+            try:
+                from app.claude_code.backend import claude_code_backend
+            except ImportError as exc:
+                message = f"Modo Claude Code indisponível: {exc}. Rode `pip install -r requirements.txt`."
+                yield _event({"type": "error", "message": message})
+                yield _event({"type": "done", "conversation_id": conversation_id, "content": message})
+                return
+            async for chunk in claude_code_backend.run_turn(
+                conversation_id, user_message, project_id, personality_id
+            ):
+                yield chunk
+            return
+
         # Seleciona o backend de inferência:
         #   "ollama" -> servidor Ollama (HTTP)
         #   "llama-cpp" -> biblioteca llama-cpp-python (se instalada)

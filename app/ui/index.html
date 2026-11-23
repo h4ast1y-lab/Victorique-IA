@@ -82,9 +82,15 @@
             <span class="tag tag-model" id="activeModelTag">—</span>
             <span class="tag tag-personality" id="activePersonalityTag">Padrão</span>
             <span class="tag tag-project" id="activeProjectTag" style="display:none;">Sem Projeto</span>
+            <span class="tag tag-claude" id="claudeBadge" hidden title="Neste modo as mensagens são processadas pela Anthropic, não no seu computador.">Claude Code — dados enviados à Anthropic</span>
           </div>
         </div>
         <div class="chat-header-actions">
+          <select id="modeSelect" class="mode-select" title="Onde a Victorique pensa">
+            <option value="llama-cpp">Local (llama.cpp)</option>
+            <option value="ollama">Local (Ollama)</option>
+            <option value="claude-code">Claude Code</option>
+          </select>
           <button class="btn btn-sm btn-ghost" id="btnExportChat" title="Exportar conversa">📥 Exportar</button>
           <button class="btn btn-sm btn-ghost text-danger" id="btnDeleteChat" title="Excluir conversa">🗑️</button>
         </div>
