@@ -23,6 +23,7 @@ from claude_agent_sdk import (
 from app.claude_code.options import build_options
 from app.claude_code.permissions import PermissionBridge
 from app.config import settings
+from app.core.dialogue_style import style_note
 from app.core.personality import personality_manager
 from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
 from app.memory.conversation_store import conversation_store
@@ -73,7 +74,11 @@ def friendly_error(error: Any) -> str:
     return f"Erro no Claude Code: {text[:500]}"
 
 
-def build_append_prompt(project_id: Optional[str], personality_id: Optional[str]) -> str:
+def build_append_prompt(
+    project_id: Optional[str],
+    personality_id: Optional[str],
+    history: Optional[List[Dict[str, Any]]] = None,
+) -> str:
     personality = personality_manager.get_personality(personality_id) if personality_id else None
     parts = [personality_manager.build_system_prompt(personality, mode="claude-code")]
     if project_id:
@@ -85,6 +90,9 @@ def build_append_prompt(project_id: Optional[str], personality_id: Optional[str]
                 f"Dossiê do caso (instruções): {project.get('instructions', '')}"
             )
     parts.append(TOOLS_NOTE)
+    note = style_note(history or [])
+    if note:
+        parts.append(note)
     return "\n\n".join(parts)
 
 
@@ -296,7 +304,9 @@ class ClaudeCodeBackend:
         bridge = PermissionBridge(emit=queue.put_nowait, conversation_id=conversation_id)
         turn = _Turn(queue.put_nowait)
         resume = conversation_store.get_claude_session(conversation_id)
-        append_prompt = build_append_prompt(project_id, personality_id)
+        append_prompt = build_append_prompt(
+            project_id, personality_id, conversation_store.get_messages(conversation_id, limit=30)
+        )
 
         def make_options(resume_id: Optional[str]):
             return build_options(

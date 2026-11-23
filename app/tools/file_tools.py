@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Dict, Any
-from app.security.path_guard import path_guard
+from app.security.path_guard import ensure_not_hardlinked, path_guard
 
 MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MB safety cap before reading into memory
 
@@ -89,6 +89,8 @@ def write_file(path: str, content: str, overwrite: bool = True) -> Dict[str, Any
         raise IsADirectoryError(f"'{path}' é um diretório; não pode ser sobrescrito como arquivo.")
     if existed and not overwrite:
         raise FileExistsError(f"O arquivo '{path}' já existe e 'overwrite' é falso.")
+    if existed:
+        ensure_not_hardlinked(resolved)
 
     resolved.parent.mkdir(parents=True, exist_ok=True)
     # Re-validate immediately before writing (parent may have been swapped).

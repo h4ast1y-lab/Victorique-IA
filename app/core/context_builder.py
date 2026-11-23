@@ -2,6 +2,7 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 from app.config import settings
+from app.core.dialogue_style import style_note
 from app.core.personality import personality_manager
 from app.memory.memory_store import memory_store
 from app.memory.project_store import project_store
@@ -140,10 +141,15 @@ class ContextBuilder:
                 f"{turbo_note}"
             )
 
+        # 6. Anti-repetition: a neutral note when recent replies reuse openings
+        note = style_note(conversation_history)
+        if note:
+            system_parts.append(note)
+
         # Combine system prompt
         full_system_prompt = "\n\n".join(system_parts)
 
-        # 6. Format recent messages with rolling history compression
+        # 7. Format recent messages with rolling history compression
         formatted_messages = []
         limit = max(1, int(settings.max_history_messages))
         valid_history = [

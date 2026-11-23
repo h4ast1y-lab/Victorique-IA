@@ -1,8 +1,65 @@
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import List, Optional
 from app.config import settings, BASE_DIR, DATA_DIR, BACKUPS_DIR, DB_PATH
+
+# Windows device names are reserved in every folder, with or without extension.
+_RESERVED_NAME = re.compile(r"^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)$", re.I)
+_DRIVE = re.compile(r"^[a-zA-Z]:$")
+
+
+def check_windows_path_syntax(raw: str, for_write: bool = False) -> None:
+    r"""
+    Refuses path forms that bypass ordinary folder rules on Windows:
+      * device namespaces (\\?\, \\.\) and UNC/network paths (\\server\share):
+        opening one can send the user's Windows credentials to another machine;
+      * reserved device names (CON, NUL, COM1, LPT1...) in any component;
+      * alternate data streams (file.txt:hidden), i.e. a colon after the drive;
+      * for writes, components ending in a dot or space, which Windows strips
+        silently, so the file created is not the one that was validated.
+    """
+    text = str(raw).strip()
+    if "\x00" in text:
+        raise PermissionError("Acesso Negado: caminho com caractere nulo.")
+    if text.startswith(("\\\\", "//", "\\/", "/\\")):
+        raise PermissionError(
+            "Acesso Negado: caminhos de rede (\\\\servidor\\pasta) e de dispositivo não são permitidos."
+        )
+    parts = [p for p in re.split(r"[\\/]+", text) if p]
+    for index, part in enumerate(parts):
+        if index == 0 and _DRIVE.match(part):
+            continue
+        if ":" in part:
+            raise PermissionError(
+                f"Acesso Negado: '{part}' usa um fluxo alternativo (':'), que não é permitido."
+            )
+        if part in (".", ".."):
+            continue
+        # Windows ignores the extension and spaces before it: "nul.txt", "aux .log".
+        if _RESERVED_NAME.match(part.split(".", 1)[0].rstrip(" ")):
+            raise PermissionError(
+                f"Acesso Negado: '{part}' é um nome reservado de dispositivo do Windows."
+            )
+        if for_write and part[-1] in ". ":
+            raise PermissionError(
+                f"Acesso Negado: o nome '{part}' termina com ponto ou espaço, que o Windows descarta."
+            )
+
+
+def ensure_not_hardlinked(path: Path) -> None:
+    """An existing file with more than one hard link shares its content with
+    another path, possibly outside the authorized folders: never edit it."""
+    try:
+        links = os.stat(path).st_nlink if path.is_file() else 1
+    except OSError:
+        return
+    if links > 1:
+        raise PermissionError(
+            f"Acesso Negado: '{path}' tem mais de um vínculo físico (hard link); "
+            "editá-lo alteraria também outro caminho."
+        )
 
 
 def _system_dirs() -> List[Path]:
@@ -124,6 +181,7 @@ class PathGuard:
         """
         if target_path is None or str(target_path).strip() == "":
             raise PermissionError("Caminho vazio não é permitido.")
+        check_windows_path_syntax(str(target_path), for_write=for_write)
 
         resolved = Path(str(target_path)).expanduser().resolve()
         if not self.is_safe_path(str(resolved)):
