@@ -1,6 +1,15 @@
-# Assistente Virtual Pessoal (Windows, local)
+# Victorique — assistente pessoal (Windows)
 
-Aplicativo desktop Windows com chat via Ollama e llama.cpp, personalidade configurável,
+Aplicativo desktop Windows com a persona **Victorique** (inspirada na personagem de
+*Gosick*: sarcástica, brilhante e direta). Funciona em dois modos, trocados no seletor
+do topo da conversa:
+
+- **Local** (llama.cpp ou Ollama): tudo roda no seu computador, offline.
+- **Claude Code**: cada mensagem é processada pelo Claude Code da Anthropic, com as
+  ferramentas dele (ler e editar arquivos, rodar comandos) sob a barra de autorização
+  do app. Veja a [seção 12](#12-modo-claude-code).
+
+Base: chat via Ollama e llama.cpp, personalidade configurável,
 histórico, memórias explícitas, projetos independentes, RAG de documentos locais com
 referências, ferramentas limitadas com autorização no backend, voz (TTS/STT) local e
 interface própria. Funciona offline depois da instalação.
@@ -114,6 +123,10 @@ avisa e continua a conversa sem execução automática.
 - Nenhum dado pessoal é salvo automaticamente. Memórias só existem quando o usuário
   cria/edita; conversas são salvas localmente por necessidade do histórico.
 - A interface não envia telemetria.
+- **Exceção: modo Claude Code.** Nele, as mensagens, o contexto e os arquivos que o
+  Claude ler são enviados à Anthropic. O selo laranja "Claude Code — dados enviados à
+  Anthropic" fica visível no topo enquanto esse modo estiver ativo. Os modos locais
+  continuam 100% offline.
 - **OCR local**: PDFs sem camada de texto são renderizados com `pypdfium2` e lidos pelo
   Tesseract na própria máquina; nenhuma página é enviada para fora.
 - **Voz (TTS/STT)**: síntese de fala via pyttsx3/SAPI5 (offline, Windows) e reconhecimento
@@ -306,6 +319,12 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 - `GET /api/stt/status`, `POST /api/stt/listen`, `POST /api/stt/transcribe`
 - `GET /api/llama-cpp-server/status`, `POST /api/llama-cpp-server/start`,
   `POST /api/llama-cpp-server/stop`
+- `GET /api/ping` (responde na hora, sem checar backends; usado pelo `run.py`)
+- `GET /api/claude-code/status` (SDK instalado, caminho do `claude.exe`, pasta de
+  trabalho, modelo e último erro)
+- `GET/POST /api/settings` também lê e grava `default_backend` (`llama-cpp`,
+  `llama-cpp-server`, `ollama` ou `claude-code`) e lista `available_backends`.
+  `POST /api/chat` aceita `backend` para escolher o modo de uma mensagem.
 
 O evento SSE `meta` chega antes dos tokens e já contém `conversation_id`; o evento
 `done` também o envia. Assim, uma conversa nova não se perde se a geração for cancelada.
@@ -379,3 +398,77 @@ data/         assistant.db, documents/, backups/  (não versionar)
   `run.bat` ativa UTF-8 e o `run.py` reconfigura os streams.
 - Antes de atualizar Ollama, modelos, Python ou dependências, faça backup e teste
   compatibilidade. Não há migração destrutiva automática.
+
+---
+
+## 12. Modo Claude Code
+
+A Victorique pode usar o **Claude Code** em vez do modelo local. O app usa o
+`claude-agent-sdk` (`requirements.txt`), que já traz o `claude.exe`; não é preciso
+instalar o Claude Code à parte.
+
+### Login (uma vez)
+
+O modo usa o login do Claude Code desta máquina (assinatura Pro/Max ou conta da
+Anthropic) e consome a sua cota. Para entrar:
+
+```bat
+claude auth login
+```
+
+Sem o Claude Code instalado, use o executável que vem com o app:
+
+```bat
+".venv\Lib\site-packages\claude_agent_sdk\_bundled\claude.exe" auth login
+```
+
+Para conferir: `.venv\Scripts\python.exe scripts\claude_login_check.py` (gasta uma
+mensagem curta). Se o login faltar ou expirar, a conversa mostra um erro em português
+com o comando acima.
+
+### Como funciona
+
+- Escolha **Claude Code** no seletor do topo. A escolha fica salva.
+- Cada conversa tem a própria sessão do Claude Code (`conversations.claude_session_id`)
+  e é retomada na mensagem seguinte. Se a sessão não puder ser retomada (pasta de
+  trabalho trocada, sessão apagada), o app começa outra e avisa.
+- A persona, o projeto ativo e a instrução de responder em pt-BR vão como acréscimo ao
+  prompt do Claude Code. As memórias e os documentos indexados ficam disponíveis por
+  duas ferramentas só de leitura: `buscar_memorias` e `buscar_documentos`.
+- As configurações pessoais do Claude Code (`~/.claude`, `CLAUDE.md`, hooks) são
+  ignoradas (`setting_sources=[]`).
+- Texto, raciocínio, ferramentas e resultados aparecem em tempo real, como no modo
+  local. Parar a geração interrompe o Claude Code e salva a resposta parcial.
+
+### Permissões
+
+- Leituras dentro da pasta de trabalho e das pastas autorizadas rodam sem perguntar.
+- Escritas, edições, comandos e acesso à internet aparecem na **barra de autorização**
+  com a ferramenta e o alvo. Recusar, ou deixar expirar (120 s), nega a ação.
+- Escrever no código do app, no banco ou nos backups é **negado sem perguntar**.
+- **Modo turbo** (`ASSISTANT_TURBO_MODE=1`): escritas e edições são aprovadas
+  automaticamente (como o `acceptEdits` do Claude Code), mas comandos e internet
+  continuam pedindo, e os caminhos protegidos continuam negados.
+- Toda decisão vai para `audit_logs`.
+
+### Configuração
+
+| Variável | Padrão | Uso |
+|---|---|---|
+| `ASSISTANT_DEFAULT_BACKEND` | `llama-cpp` | Modo inicial (`claude-code` para começar no Claude) |
+| `ASSISTANT_CLAUDE_WORKSPACE` | `~/Documents` | Pasta de trabalho do Claude Code |
+| `ASSISTANT_CLAUDE_MODEL` | vazio | Modelo do Claude Code; vazio usa o padrão dele |
+
+As pastas autorizadas (`ASSISTANT_AUTHORIZED_DIRS`) entram como pastas extras, menos as
+pastas protegidas do app.
+
+### Verificação
+
+- Testes automatizados com um cliente falso do SDK: eventos, sessões, retomada,
+  erros de login, cancelamento, opções travadas e a ponte de permissões.
+- Verificado no app real em 23/11/2026: seletor e selo funcionando; uma mensagem no
+  modo Claude Code chega ao `claude.exe` do pacote e, com o login expirado, mostra a
+  ajuda de login em 2,7 s.
+- **Pendente:** o teste real com login válido (conversa, leitura, escrita aprovada e
+  recusada pela barra).
+
