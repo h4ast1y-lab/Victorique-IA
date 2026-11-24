@@ -498,7 +498,7 @@
           </div>
           <div class="field-row">
             <div class="field grow">
-              <label for="prefMaxTokens">Tamanho máximo da resposta (tokens)</label>
+              <label for="prefMaxContext">Tamanho do contexto (tokens)</label><input type="number" id="prefMaxContext" min="2048" max="65536" step="1024" data-pref="max_context_tokens"></div><div class="field grow"><label for="prefMaxTokens">Tamanho máximo da resposta (tokens)</label>
               <input type="number" id="prefMaxTokens" min="256" max="16384" step="256" data-pref="max_output_tokens">
             </div>
             <div class="field grow">
@@ -506,7 +506,7 @@
               <input type="number" id="prefHistory" min="2" max="100" data-pref="max_history_messages">
             </div>
           </div>
-          <small class="hint">Temperatura, tamanho e histórico valem para os modos locais.</small>
+          <small class="hint">Temperatura, contexto, tamanho e histórico valem para os modos locais (Ollama e llama.cpp). Alterar o contexto reinicia o llama-server se estiver ativo.</small>
           <div class="toggle-row">
             <div><strong>Consultar a biblioteca de documentos</strong><small>Busca trechos dos seus documentos para responder com citação de página.</small></div>
             <input type="checkbox" class="switch" data-pref="enable_rag">
@@ -643,6 +643,16 @@
         <section class="settings-section" data-section="voice">
           <h2>Voz</h2>
           <p class="section-lead">Fala e ditado rodam no seu computador.</p>
+          <h3>Laboratório de voz</h3>
+          <label for="vicVoiceText">Texto de teste</label>
+          <textarea id="vicVoiceText" maxlength="1200">Ora, era uma dedução bastante simples.</textarea>
+          <label for="vicVoiceLang">Idioma</label>
+          <select id="vicVoiceLang"><option value="pt">Português</option><option value="ja">Japonês</option></select>
+          <label for="vicVoiceEmotion">Emoção</label>
+          <select id="vicVoiceEmotion"><option>normal</option><option>brava</option><option>depois de acordar</option><option>empolgação</option><option>explicação</option><option>leve desprezo</option><option>medo</option><option>risadas</option><option>séria</option><option>tédio</option></select>
+          <button id="vicVoiceGenerate" type="button">Gerar áudio</button>
+          <div><audio controls preload="none" id="vicVoicePlayer" src="/api/tts/demo"></audio></div>
+          <small id="vicVoiceMessage" role="status">Ouça a demonstração ou gere uma fala com o seu texto.</small>
           <div class="status-card" id="voiceStatus">Verificando voz…</div>
           <div class="toggle-row">
             <div><strong>Ler as respostas em voz alta</strong><small>Fala cada resposta assim que ela termina.</small></div>

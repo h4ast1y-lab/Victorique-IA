@@ -88,14 +88,29 @@ class ToolRegistry:
         ))
         self.register(ToolDefinition(
             name="read_file",
-            description="Lê o conteúdo em texto de qualquer arquivo no computador.",
+            description=(
+                "Lê o conteúdo em texto de arquivos no computador, incluindo PDF, EPUB e DOCX. "
+                "Para livros/documentos longos, lê por páginas (padrão páginas 1-3) ou busca trechos com 'query' para economizar contexto."
+            ),
             category=ActionCategory.FREE,
             func=read_file,
             parameters=_schema({
-                "path": {"type": "string", "description": "Caminho completo do arquivo a ler (ex.: 'C:\\caminho\\arquivo.txt')."},
+                "path": {"type": "string", "description": "Caminho completo do arquivo a ler (ex.: 'C:\\caminho\\arquivo.pdf')."},
+                "start_page": {
+                    "type": "integer",
+                    "description": "Página/seção inicial (1-based) para PDF/EPUB/DOCX. Padrão: 1.",
+                },
+                "end_page": {
+                    "type": "integer",
+                    "description": "Página/seção final (1-based). Padrão: start_page + 2 (lê 3 páginas por vez).",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Termo opcional para buscar dentro do arquivo e retornar só os trechos encontrados.",
+                },
                 "max_chars": {
                     "type": "integer",
-                    "description": "Máximo de caracteres retornados (padrão 15000).",
+                    "description": "Máximo de caracteres retornados (padrão 6000).",
                 },
             }, required=["path"]),
         ))

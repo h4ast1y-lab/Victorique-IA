@@ -249,12 +249,88 @@ class LlamaCppServerClient:
                 pass
             self._log_file = None
 
+    def set_n_ctx(self, n_ctx: int) -> bool:
+        """Troca o tamanho do contexto.
+
+        Retorna True quando um servidor iniciado por este cliente estava no ar
+        e foi reiniciado (em segundo plano) com o novo ``--ctx-size``.
+        """
+        n_ctx = int(n_ctx)
+        if n_ctx == self.n_ctx:
+            return False
+        self.n_ctx = n_ctx
+        if self._proc is None and not self._available:
+            return False
+        logger.info("Reiniciando llama-server com --ctx-size %s", n_ctx)
+        self.stop()
+        self.start_in_background()
+        return True
+
+    def _running_n_ctx(self) -> Optional[int]:
+        """O ``n_ctx`` do servidor que está respondendo na porta, se ele disser."""
+        try:
+            r = httpx.get(f"{self._base_url}/props", timeout=2.0)
+            if r.status_code != 200:
+                return None
+            settings = r.json().get("default_generation_settings") or {}
+            value = settings.get("n_ctx")
+            return int(value) if value else None
+        except Exception:
+            return None
+
+    def _kill_orphan_on_port(self) -> bool:
+        """Encerra um llama-server órfão (de uma execução anterior) na porta.
+
+        Só mata processos cujo executável se chama ``llama-server``; qualquer
+        outro programa na porta é deixado em paz.
+        """
+        if os.name != "nt":
+            return False
+        no_window = subprocess.CREATE_NO_WINDOW
+        try:
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+                timeout=10, creationflags=no_window,
+            ).stdout
+        except Exception:
+            return False
+        pids = set()
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 5 and parts[3].upper() == "LISTENING" and parts[1].endswith(f":{self.port}"):
+                pids.add(parts[4])
+        killed = False
+        for pid in pids:
+            try:
+                info = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                    capture_output=True, text=True, timeout=10, creationflags=no_window,
+                ).stdout.lower()
+                if "llama-server" not in info:
+                    continue
+                subprocess.run(["taskkill", "/PID", pid, "/F"], capture_output=True,
+                               timeout=10, creationflags=no_window)
+                killed = True
+            except Exception:
+                continue
+        if killed:
+            for _ in range(20):
+                if not self.is_alive():
+                    break
+                time.sleep(0.25)
+        return killed
+
     def _start_locked(self, wait_seconds: int) -> bool:
         if self.is_alive():
-            self._available = True
-            self._init_error = None
-            logger.info("llama-server já está rodando em %s", self._base_url)
-            return True
+            running = self._running_n_ctx() if self._proc is None else None
+            if running is not None and running != self.n_ctx and self._kill_orphan_on_port():
+                logger.info("llama-server órfão com n_ctx=%s encerrado; subindo com %s",
+                            running, self.n_ctx)
+            else:
+                self._available = True
+                self._init_error = None
+                logger.info("llama-server já está rodando em %s", self._base_url)
+                return True
 
         if not self.server_exe.is_file():
             self._init_error = f"llama-server.exe não encontrado: {self.server_exe}"

@@ -116,3 +116,18 @@ def test_turbo_preference_updates_live_setting(client):
 def test_system_prompt_asks_for_latex():
     prompt = personality_manager.build_system_prompt()
     assert "LaTeX" in prompt and "$$" in prompt and "R$ 10" in prompt
+
+
+def test_max_context_tokens_updates_llama_cpp_and_ollama_settings(client):
+    from app.models.llama_cpp_server_client import llama_cpp_server
+
+    original = client.get("/api/preferences").json()
+    try:
+        r = client.post("/api/preferences", json={"max_context_tokens": 16384})
+        assert r.status_code == 200
+        assert settings.max_context_tokens == 16384
+        assert settings.llama_cpp_n_ctx == 16384
+        assert llama_cpp_server.n_ctx == 16384
+    finally:
+        _restore(client, original)
+    assert llama_cpp_server.n_ctx == original["max_context_tokens"]

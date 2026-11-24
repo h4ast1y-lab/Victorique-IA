@@ -27,6 +27,7 @@ SCHEMA: Dict[str, tuple] = {
     "response_language": ("choice", "auto", ("auto", "pt-BR", "en", "es")),
     # --- Generation ---
     "temperature": ("float", settings.temperature, (0.0, 2.0)),
+    "max_context_tokens": ("int", settings.max_context_tokens, (2048, 65536)),
     "max_output_tokens": ("int", settings.max_output_tokens, (256, 16384)),
     "max_history_messages": ("int", settings.max_history_messages, (2, 100)),
     "enable_rag": ("bool", True, None),
@@ -79,7 +80,7 @@ SCHEMA: Dict[str, tuple] = {
 }
 
 # Preferences mirrored onto the live settings object.
-_LIVE = ("temperature", "max_output_tokens", "max_history_messages",
+_LIVE = ("temperature", "max_context_tokens", "max_output_tokens", "max_history_messages",
          "tts_speak_responses", "claude_code_model", "codex_model", "turbo_mode")
 
 _MODEL_RE = re.compile(r"[A-Za-z0-9._:\-\[\]]*")
@@ -161,6 +162,9 @@ def apply_to_settings(prefs: Dict[str, Any] | None = None) -> None:
     prefs = prefs or load()
     for name in _LIVE:
         setattr(settings, name, prefs[name])
+    settings.llama_cpp_n_ctx = prefs["max_context_tokens"]
+    from app.models.llama_cpp_server_client import llama_cpp_server
+    llama_cpp_server.set_n_ctx(prefs["max_context_tokens"])
 
 
 _LANGUAGE_LINES = {

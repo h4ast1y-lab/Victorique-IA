@@ -535,6 +535,26 @@ function backendLabel(value) {
 }
 
 async function initVoice() {
+  const button = $('vicVoiceGenerate');
+  const player = $('vicVoicePlayer');
+  button.onclick = async () => {
+    button.disabled = true;
+    const message = $('vicVoiceMessage');
+    message.textContent = 'Gerando a voz no computador…';
+    try {
+      const response = await fetch('/api/tts/audio', { method: 'POST',
+        headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+          text: $('vicVoiceText').value.trim(), language: $('vicVoiceLang').value, emotion: $('vicVoiceEmotion').value
+        }) });
+      if (!response.ok) throw new Error('Verifique o texto e a disponibilidade do motor de voz.');
+      const previous = player.src;
+      player.src = URL.createObjectURL(await response.blob());
+      if (previous.startsWith('blob:')) URL.revokeObjectURL(previous);
+      message.textContent = 'Áudio pronto para reprodução.';
+      await player.play().catch(() => {});
+    } catch (err) { message.textContent = err.message; }
+    finally { button.disabled = false; }
+  };
   try {
     const [tts, stt] = await Promise.all([api('/api/tts/status'), api('/api/stt/status')]);
     ttsAvailable = tts.available === true;

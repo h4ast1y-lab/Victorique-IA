@@ -117,7 +117,26 @@ def check_configured_model():
         pass
 
 
+def _load_dotenv():
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.is_file():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                os.environ.setdefault(key, value)
+    except OSError:
+        pass
+
+
 def main():
+    _load_dotenv()
     configure_console()
     print("=" * 60)
     print("  Iniciando Victorique (Desktop)")

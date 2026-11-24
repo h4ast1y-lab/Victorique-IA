@@ -129,3 +129,52 @@ def test_run_py_waits_on_ping():
     from pathlib import Path
     source = (Path(__file__).resolve().parent.parent / "run.py").read_text(encoding="utf-8")
     assert "/api/ping" in source
+
+
+def test_set_n_ctx_restarts_running_server(fake_server, monkeypatch):
+    client, spawned = fake_server
+    orig_is_alive = client.is_alive
+    monkeypatch.setattr(client, "is_alive", lambda: client._proc is not None and orig_is_alive())
+    monkeypatch.setattr(client, "_running_n_ctx", lambda: None)
+    assert client.start(wait_seconds=5) is True
+    assert len(spawned) == 1
+    assert "--ctx-size" in client.build_args()
+    idx = client.build_args().index("--ctx-size")
+    assert client.build_args()[idx + 1] == str(client.n_ctx)
+
+    # Same value does not restart
+    assert client.set_n_ctx(client.n_ctx) is False
+    assert len(spawned) == 1
+
+    # New value stops and restarts in background with the new --ctx-size
+    assert client.set_n_ctx(16384) is True
+    assert client.n_ctx == 16384
+    assert client.start(wait_seconds=5) is True
+    assert len(spawned) == 2
+    idx2 = client.build_args().index("--ctx-size")
+    assert client.build_args()[idx2 + 1] == "16384"
+    client.stop()
+
+
+def test_start_replaces_orphan_server_with_mismatched_n_ctx(fake_server, monkeypatch):
+    client, spawned = fake_server
+    client.n_ctx = 8192
+    orphan_alive = {"v": True}
+
+    monkeypatch.setattr(
+        client,
+        "is_alive",
+        lambda: orphan_alive["v"] or client._proc is not None,
+    )
+    monkeypatch.setattr(client, "_running_n_ctx", lambda: 4096)
+
+    def fake_kill_orphan():
+        orphan_alive["v"] = False
+        return True
+
+    monkeypatch.setattr(client, "_kill_orphan_on_port", fake_kill_orphan)
+
+    assert client.start(wait_seconds=5) is True
+    assert orphan_alive["v"] is False
+    assert len(spawned) == 1
+    client.stop()

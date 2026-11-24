@@ -56,6 +56,7 @@ CSP = (
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; "
     "font-src 'self'; "
+    "media-src 'self' blob:; "
     "connect-src 'self'; "
     "object-src 'none'; "
     "base-uri 'none'; "
@@ -390,10 +391,37 @@ async def tts_speak(req: TTSSpeakRequest):
     if req.async_:
         tts_engine.speak_async(req.text)
         return {"status": "speaking_async"}
-    ok = tts_engine.speak(req.text)
+    ok = await asyncio.to_thread(tts_engine.speak, req.text)
     if not ok:
         raise HTTPException(status_code=500, detail="Falha ao sintetizar fala.")
     return {"status": "spoken"}
+
+
+class VoiceLabRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1200)
+    language: Literal["pt", "ja"] = "pt"
+    emotion: str = "normal"
+
+
+@app.post("/api/tts/audio")
+def voice_lab_audio(req: VoiceLabRequest):
+    from fastapi.responses import Response
+    if not settings.tts_enabled or not getattr(tts_engine, "audio", None) or not tts_engine.available:
+        raise HTTPException(503, "O motor de voz está indisponível.")
+    try:
+        wav = tts_engine.audio(req.text, req.language, req.emotion)
+    except Exception:
+        logging.getLogger("voice").exception("Falha ao gerar amostra")
+        raise HTTPException(503, "Falha ao gerar a voz. Consulte data/voice/service.log.")
+    return Response(wav, media_type="audio/wav", headers={"Cache-Control":"no-store"})
+
+
+@app.get("/api/tts/demo")
+def voice_demo():
+    wav = BASE_DIR / "data/voice/victorique.wav"
+    if not wav.is_file():
+        raise HTTPException(404, "Amostra ainda indisponível.")
+    return FileResponse(wav, media_type="audio/wav")
 
 
 @app.get("/api/stt/status")

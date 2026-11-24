@@ -100,7 +100,13 @@ class TTSEngine:
         threading.Thread(target=_run, daemon=True).start()
 
 
-tts_engine = TTSEngine()
+if (Path(__file__).resolve().parents[2] / ".venv-voice/Scripts/python.exe").is_file():
+    from app.voice.provider import ChatterboxEngine
+    import atexit
+    tts_engine = ChatterboxEngine()
+    atexit.register(tts_engine.close)
+else:
+    tts_engine = TTSEngine()
 
 
 # ---------------------------------------------------------------------------

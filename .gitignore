@@ -1,49 +1,111 @@
-# Dados e ambiente locais
+# =============================================================================
+# .gitignore - Victorique-IA
+# Projeto Python / IA (PyTorch, áudio/voz)
+# =============================================================================
+
+# --- Ambientes virtuais Python (NÃO subir ao GitHub) ---
 .venv/
+.venv-voice/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Bytecode e arquivos compilados Python ---
 __pycache__/
 *.py[cod]
-.pytest_cache/
+*$py.class
+*.so
+.Python
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/parts/
+/lib/
+/lib64/
+/sdist/
+/var/
+/wheels/
+/share/
+/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Banco, documentos e backups do usuário (NUNCA versionar)
-data/*.db
-data/*.db-shm
-data/*.db-wal
-data/backups/
-data/documents/
-data/*.log
-
-# Configurações locais
-.env
-.env.*
-
-# Sistema / editores
-Thumbs.db
-Desktop.ini
-.DS_Store
+# --- IDEs e editores de código ---
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-# Artefatos
+# --- Sistema operacional ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints/
+*.ipynb
+.checkpoint/
+
+# --- Testes e cobertura ---
+.pytest_cache/
+.coverage
+coverage.xml
+coverage.html/
+htmlcov/
+.tox/
+.nox/
+
+# --- Logs ---
 *.log
+/logs/
+
+# --- IA / Machine Learning - modelos e dados (grandes, não versionar) ---
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.gguf
+*.h5
+*.npz
+*.npy
+*.zip
+*.tar.gz
+*.rar
+*.7z
+/data/
+/datasets/
+/models/
+/checkpoints/
+/outputs/
+/runs/
+/mlruns/
+.wandb/
+
+# --- Arquivos temporários ---
 *.tmp
-dist/
-build/
+*.temp
+*.bak
 
-# Clipes do retrato e histórico do Organizador (pessoais)
-data/clips/
-data/operations.json
-data/operations.tmp
+# --- Variáveis de ambiente / secrets ---
+.env
+.env.*
+!.env.example
 
-# Configuração local do Claude Code
+# --- Específicos do Victorique ---
+# Configuração local do Claude Code e registros de sessão
 .claude/
-
-# Vida própria: estado e banco de falas editado (pessoais)
-data/vida_propria.json
-data/.vida-*
-data/falas.md
-
-# Foto do avatar enviada pelo usuário
-data/avatar/
-
+.superpowers/
 # Launcher gerado (scripts/build_launcher.py)
-Victorique.exe
+/Victorique.exe
