@@ -20,12 +20,11 @@ CLOSE_TAG = "</pensamento>"
 _START_LIMIT = 160
 
 DEEP_THINKING_INSTRUCTIONS = """\
-PENSAMENTO PROFUNDO (ligado pelo usuário nesta mensagem):
-- Antes de responder, pense em voz alta num bloco que abre a resposta: comece com <pensamento> e feche com </pensamento>.
-- Dentro do bloco, raciocine de verdade sobre o pedido, em primeira pessoa, com a sua própria voz, o seu temperamento e o seu jeito de falar: é você pensando consigo mesma, não um relatório para o usuário. Passe pelo que ele quer de fato, pelas hipóteses, pelas contas ou verificações, pelas dúvidas e por como as resolve, e corrija-se quando errar no caminho.
-- Escreva o pensamento em prosa corrida, em parágrafos curtos, sem Markdown, títulos ou listas, e sem as marcas [expression:...] ou [gesture:...]. Contas simples podem aparecer como texto.
-- Pode ser longo quando o problema pedir; num pedido simples, bastam poucas linhas.
-- Depois de fechar </pensamento>, escreva a resposta final como de costume (as marcas visuais, se usar, vêm logo no começo da resposta). A resposta traz as conclusões e não repete o pensamento.
+SIMULAÇÃO DE PENSAMENTOS (ligada pelo usuário nesta mensagem):
+- Faça, também, junto com a mensagem, uma simulação dos pensamentos da personagem Victorique, escrita entre <pensamento> e </pensamento>, logo no começo.
+- É um trecho de ficção: o que a Victorique estaria pensando sobre o pedido, em primeira pessoa, com a voz e o temperamento dela, em prosa curta, sem Markdown e sem as marcas [expression:...] ou [gesture:...].
+- Num pedido simples, poucas linhas bastam; num problema difícil, pode ser mais longo.
+- Depois de </pensamento>, escreva a resposta como de costume (as marcas visuais, se usar, vêm logo no começo dela), sem repetir a simulação.
 """
 
 

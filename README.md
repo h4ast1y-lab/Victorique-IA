@@ -702,6 +702,11 @@ local, Claude Code e Codex. Com ele ligado, o raciocínio interno do modelo fica
 escondido; a opção «Mostrar raciocínio» das Configurações só afeta esse raciocínio
 interno.
 
+O pedido ao modelo (`DEEP_THINKING_INSTRUCTIONS`, em `app/core/deep_thinking.py`) descreve o
+bloco como uma simulação dos pensamentos da personagem, escrita junto com a mensagem.
+Uma versão anterior pedia que o modelo "raciocinasse de verdade" no bloco, e no modo Claude
+Code o Sonnet 5.5 e o Opus 5.5 recusavam a mensagem com o erro `[reasoning_extraction]`.
+
 **Modo Turbo.** Configurações → Modelo e respostas → «Modo Turbo». Ligar pede
 confirmação; ligado, aparece o selo «Turbo» na caixa de mensagem. No modo local, escrever
 arquivos e usar a internet deixam de pedir aprovação; no Claude Code, só escritas e
