@@ -34,11 +34,16 @@ from app.tools.registry import tool_registry
 from app.tools import organizer
 from app.life.service import life_service
 from app.mascot.bus import mascot_bus
+from app.library import activity as library_activity, sections as library_sections
 from app.voice import tts_engine, stt_engine
 
 # Initialize database schema on startup
 init_db()
 preferences.apply_to_settings()
+try:
+    library_sections.apply_authorization()  # each Biblioteca section is an authorized folder
+except Exception:
+    logging.getLogger(__name__).exception("Biblioteca: seções não autorizadas")
 
 
 app = FastAPI(title=settings.app_name, version=settings.version)
@@ -102,10 +107,11 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = ""
     message: str = Field(min_length=1)
     model: Optional[str] = None
-    backend: Optional[str] = None  # "ollama", "llama-cpp", "llama-cpp-server"
+    backend: Optional[str] = None  # "ollama", "llama-cpp", "llama-cpp-server", "claude-code", "codex"
     project_id: Optional[str] = None
     personality_id: Optional[str] = None
     enable_rag: bool = True
+    deep_thinking: bool = False
 
 class ConversationCreate(BaseModel):
     title: Optional[str] = "Nova Conversa"
@@ -251,6 +257,9 @@ async def health_check():
         backend_ok = llama_cpp_server.available or llama_cpp_client.available
     elif backend == "claude-code":
         backend_ok = _claude_sdk_installed()
+    elif backend == "codex":
+        from app.codex import backend as codex_module
+        backend_ok = codex_module.find_codex() is not None
     else:
         backend_ok = ollama_ok
     return {
@@ -340,6 +349,22 @@ async def claude_code_status():
         "workspace": settings.claude_code_workspace,
         "model": settings.claude_code_model,
         "last_error": last_error,
+    }
+
+
+@app.get("/api/codex/status")
+async def codex_status():
+    """Is the Codex CLI here? Nothing is ever installed automatically."""
+    from app.codex import backend as codex_module
+    command = codex_module.find_codex()
+    return {
+        "installed": command is not None,
+        "command": " ".join(command) if command else None,
+        "workspace": settings.codex_workspace,
+        "model": settings.codex_model,
+        "sandbox": "read-only",
+        "last_error": codex_module.codex_backend.last_error,
+        "install": codex_module.INSTALL_STEPS,
     }
 
 
@@ -521,6 +546,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             project_id=req.project_id,
             personality_id=req.personality_id,
             enable_rag=req.enable_rag,
+            deep_thinking=req.deep_thinking,
         )
         try:
             async for chunk in agen:
@@ -957,7 +983,11 @@ class MascotReply(BaseModel):
 
 
 class MascotCommand(BaseModel):
-    action: Literal["home", "hide"]
+    action: Literal["home", "hide", "close-mini"]
+
+
+class MascotOpenConversation(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9-]+$")
 
 
 @app.get("/api/mascot/status")
@@ -988,6 +1018,91 @@ async def mascot_reply(req: MascotReply):
 @app.post("/api/mascot/command")
 async def mascot_command(req: MascotCommand):
     return {"delivered": mascot_bus.command(req.action)}
+
+
+@app.post("/api/mascot/open-conversation")
+async def mascot_open_conversation(req: MascotOpenConversation):
+    """From the mini chat: continue this conversation in the main window."""
+    return {"opened": mascot_bus.open_conversation(req.conversation_id)}
+
+# ----------------- Biblioteca (sections = folders, books = files) -----------------
+class LibrarySectionCreate(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    name: Optional[str] = Field(None, max_length=60)
+
+
+@app.get("/api/library/sections")
+async def library_list_sections():
+    return await asyncio.to_thread(library_sections.list_sections)
+
+
+@app.post("/api/library/sections")
+async def library_link_section(req: LibrarySectionCreate):
+    try:
+        return await asyncio.to_thread(library_sections.link, req.path, req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/library/sections/{section_id}")
+async def library_unlink_section(section_id: str):
+    try:
+        await asyncio.to_thread(library_sections.unlink, section_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Seção não encontrada.")
+    return {"status": "unlinked"}
+
+
+@app.get("/api/library/sections/{section_id}/books")
+async def library_books(section_id: str, limit: int = library_sections.MAX_BOOKS):
+    try:
+        return await asyncio.to_thread(
+            library_sections.books, section_id, min(max(limit, 1), library_sections.MAX_BOOKS))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Seção não encontrada.")
+
+
+@app.get("/api/library/activity")
+async def library_activity_since(since: int = 0):
+    return library_activity.since(max(0, since))
+
+
+def _pick_folder():
+    """Native folder picker of the desktop window; False when there is none (browser)."""
+    try:
+        import webview
+        if not webview.windows:
+            return False
+        dialog = getattr(getattr(webview, "FileDialog", None), "FOLDER", None)
+        if dialog is None:
+            dialog = webview.FOLDER_DIALOG
+        chosen = webview.windows[0].create_file_dialog(dialog)
+    except Exception:
+        return False
+    if not chosen:
+        return None
+    return chosen[0] if isinstance(chosen, (list, tuple)) else str(chosen)
+
+
+@app.post("/api/library/pick-folder")
+async def library_pick_folder():
+    path = await asyncio.to_thread(_pick_folder)
+    return {"available": path is not False, "path": path or None}
+
+
+_ATLAS_DIR = Path(__file__).resolve().parent / "mascot" / "assets"
+
+
+@app.get("/api/mascot/atlas")
+async def mascot_atlas_image():
+    """Her sprite sheet, for the Biblioteca's hall."""
+    return FileResponse(str(_ATLAS_DIR / "victorique.webp"), media_type="image/webp")
+
+
+@app.get("/api/mascot/atlas.json")
+async def mascot_atlas_frames():
+    return FileResponse(str(_ATLAS_DIR / "victorique.json"), media_type="application/json")
+
 
 # ----------------- Organizer (history of moves, undo) -----------------
 @app.get("/api/operations")
@@ -1047,6 +1162,8 @@ async def download_backup(name: str):
 async def restore(req: BackupRestoreRequest):
     try:
         result = restore_backup(req.name, confirm=req.confirm)
+        # An older backup may predate newer columns (e.g. messages.reasoning).
+        init_db()
         # Pending actions from the previous database state must not survive.
         security_manager.pending_actions.clear()
         return result

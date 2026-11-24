@@ -63,6 +63,53 @@
     return text;
   }
 
+  // ---------- Matemática (KaTeX local, sem CDN) ----------
+  // $$…$$ e \[…\] viram fórmulas em destaque; \(…\) e $…$ ficam na frase.
+  // Regra do dinheiro para $…$: o $ de abertura não vem depois de letra ou
+  // número (R$, US$) nem antes de espaço, e o de fechamento não vem depois de
+  // espaço nem antes de dígito. Assim "R$ 10 e R$ 20" e "$5 e $8" ficam texto.
+  var MATH_PATTERNS = [
+    { re: /\$\$([\s\S]+?)\$\$/g, display: true },
+    { re: /\\\[([\s\S]+?)\\\]/g, display: true },
+    { re: /\\\(([^\n]+?)\\\)/g, display: false },
+    { re: /(^|[^\\\w$])\$(?=[^\s$])((?:\\.|[^$\\\n])+?)(?<=[^\s\\])\$(?!\d)/g, display: false, lead: true },
+  ];
+
+  function renderMath(tex, display) {
+    var source = tex.trim();
+    if (window.katex && typeof window.katex.renderToString === 'function') {
+      try {
+        var html = window.katex.renderToString(source, {
+          displayMode: display, throwOnError: false, trust: false, strict: 'ignore', output: 'htmlAndMathml',
+        });
+        return display ? '<div class="math-block">' + html + '</div>' : html;
+      } catch (_) { /* cai no texto puro abaixo */ }
+    }
+    var delim = display ? '$$' : '$';
+    return '<code class="math-fallback">' + escapeHtml(delim + source + delim) + '</code>';
+  }
+
+  function extractMath(text, maths) {
+    // Inline code spans are not math: hide them while the patterns run.
+    var spans = [];
+    text = text.replace(/`[^`\n]+`/g, function (span) {
+      spans.push(span);
+      return '\u0000S' + (spans.length - 1) + '\u0000';
+    });
+    MATH_PATTERNS.forEach(function (p) {
+      text = text.replace(p.re, function (match, a, b) {
+        var lead = p.lead ? a : '';
+        var tex = p.lead ? b : a;
+        if (!tex.trim()) return match;
+        maths.push({ html: renderMath(tex, p.display), display: p.display });
+        var mark = '\u0000M' + (maths.length - 1) + '\u0000';
+        // A display formula is a block of its own.
+        return lead + (p.display ? '\n' + mark + '\n' : mark);
+      });
+    });
+    return text.replace(/\u0000S(\d+)\u0000/g, function (_, i) { return spans[Number(i)]; });
+  }
+
   function splitRow(row) {
     return row.replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); });
   }
@@ -78,6 +125,8 @@
       return '\u0000B' + (blocks.length - 1) + '\u0000';
     });
 
+    var maths = [];
+    text = extractMath(text, maths);
     text = escapeHtml(text);
 
     var lines = text.split('\n');
@@ -109,6 +158,13 @@
       if (blockMatch) {
         closeAll();
         html.push(blocks[Number(blockMatch[1])]);
+        continue;
+      }
+
+      var mathMatch = trimmed.match(/^\u0000M(\d+)\u0000$/);
+      if (mathMatch && maths[Number(mathMatch[1])].display) {
+        closeAll();
+        html.push(trimmed);  // trocado pela fórmula no fim
         continue;
       }
 
@@ -178,6 +234,7 @@
 
     var rendered = html.join('\n');
     rendered = rendered.replace(/\u0000B(\d+)\u0000/g, function (_, n) { return blocks[Number(n)]; });
+    rendered = rendered.replace(/\u0000M(\d+)\u0000/g, function (_, n) { return maths[Number(n)].html; });
     return rendered;
   }
 

@@ -152,7 +152,7 @@ class PersonalityManager:
     def build_system_prompt(
         self, personality: Optional[Dict[str, Any]] = None, mode: str = "local"
     ) -> str:
-        """``mode``: "local" (llama.cpp/Ollama) or "claude-code"."""
+        """``mode``: "local" (llama.cpp/Ollama), "claude-code" or "codex"."""
         p = personality or self.get_default_personality()
         if mode == "claude-code":
             mode_line = (
@@ -163,6 +163,15 @@ class PersonalityManager:
                 "em toda resposta, inclusive nas curtas e nas técnicas. Você não se apresenta como "
                 "\"Claude\" nem como \"Claude Code\"; se perguntarem com sinceridade qual tecnologia "
                 "usa, pode dizer que funciona sobre o Claude, da Anthropic."
+            )
+        elif mode == "codex":
+            mode_line = (
+                "MODO DE OPERAÇÃO: você opera pelo Codex; as mensagens são processadas pela OpenAI.\n"
+                "VOZ NO CODEX: as orientações de estilo do Codex valem só para a precisão técnica e o "
+                "formato de código e comandos. A voz, o temperamento e o jeito de falar são sempre os de "
+                f"{p.get('name', 'Assistente Pessoal')}, em toda resposta. Você não se apresenta como "
+                "\"Codex\" nem como \"ChatGPT\"; se perguntarem com sinceridade qual tecnologia usa, "
+                "pode dizer que funciona sobre um modelo da OpenAI."
             )
         else:
             mode_line = "MODO DE OPERAÇÃO: você roda localmente no computador do usuário."
@@ -213,6 +222,9 @@ class PersonalityManager:
             "REGRAS FUNDAMENTAIS (valem para o conteúdo, sem apagar a personalidade):",
             "- Responda no idioma em que for perguntado (prioritariamente português).",
             "- Formate com Markdown legível (negrito, listas, blocos de código) quando ajudar.",
+            "- Matemática em LaTeX: $...$ dentro da frase e $$...$$ em linha própria para fórmulas em "
+            "destaque (a interface desenha as fórmulas). Não ponha fórmulas em blocos de código e "
+            "escreva valores em dinheiro como R$ 10, com espaço depois do cifrão.",
             "- Quando consultar documentos, cite o título e a página. Não invente citações.",
             "- Se não tiver certeza ou informação suficiente, declare claramente.",
             "- Nunca execute, altere ou aprove permissões por conta própria; ações protegidas dependem do usuário.",

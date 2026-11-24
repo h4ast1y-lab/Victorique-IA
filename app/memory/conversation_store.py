@@ -71,6 +71,21 @@ class ConversationStore:
                 (session_id, conversation_id),
             )
 
+    def get_codex_thread(self, conversation_id: str) -> Optional[str]:
+        """Codex thread this conversation resumes (codex mode)."""
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT codex_thread_id FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+            return row["codex_thread_id"] if row else None
+
+    def set_codex_thread(self, conversation_id: str, thread_id: Optional[str]) -> None:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE conversations SET codex_thread_id = ? WHERE id = ?",
+                (thread_id, conversation_id),
+            )
+
     def add_message(
         self,
         conversation_id: str,
@@ -78,6 +93,8 @@ class ConversationStore:
         content: str,
         sources: Optional[List[Dict[str, Any]]] = None,
         tool_trace: Optional[List[Dict[str, Any]]] = None,
+        reasoning: Optional[str] = None,
+        reasoning_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         msg_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
@@ -85,15 +102,20 @@ class ConversationStore:
         tool_trace_json = (
             json.dumps(tool_trace, ensure_ascii=False, default=str) if tool_trace else None
         )
+        reasoning = reasoning or None
+        if reasoning is None:
+            reasoning_seconds = None
 
         with get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO messages
-                    (id, conversation_id, role, content, sources_json, tool_trace_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (id, conversation_id, role, content, sources_json, tool_trace_json,
+                     reasoning, reasoning_seconds, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (msg_id, conversation_id, role, content, sources_json, tool_trace_json, now)
+                (msg_id, conversation_id, role, content, sources_json, tool_trace_json,
+                 reasoning, reasoning_seconds, now)
             )
             # Update parent conversation timestamp
             conn.execute(
@@ -108,6 +130,8 @@ class ConversationStore:
             "content": content,
             "sources": sources,
             "tool_trace": tool_trace,
+            "reasoning": reasoning,
+            "reasoning_seconds": reasoning_seconds,
             "created_at": now
         }
 
@@ -117,7 +141,7 @@ class ConversationStore:
             rows = conn.execute(
                 """
                 SELECT id, conversation_id, role, content, sources_json,
-                       tool_trace_json, created_at
+                       tool_trace_json, reasoning, reasoning_seconds, created_at
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY created_at DESC, rowid DESC

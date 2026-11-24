@@ -51,6 +51,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupEventListeners();
   setupSliders();
   setupSettingsControls();
+  setupDeepThinkingButton();
   renderSuggestions();
   applyAvatarPhoto();
   loadAvatarPhoto();
@@ -81,6 +82,10 @@ function setupEventListeners() {
       const targetPane = $(paneId);
       if (targetPane) targetPane.classList.add('active');
       if (tab.dataset.tab === 'organizer') loadOperations();
+      if (window.VictoriqueLibrary) {
+        if (tab.dataset.tab === 'hall') window.VictoriqueLibrary.open();
+        else window.VictoriqueLibrary.close();
+      }
     });
   });
 
@@ -269,6 +274,39 @@ async function copyText(text, button) {
 }
 
 // ----------------- Preferences & appearance -----------------
+// Modo Turbo: ligar pede uma confirmação; desligar é imediato.
+function setupTurboSwitch() {
+  const box = $('prefTurbo');
+  const confirmBox = $('turboConfirm');
+  box.addEventListener('change', () => {
+    if (box.checked) {
+      box.checked = false;  // só liga depois de confirmar
+      confirmBox.hidden = false;
+      $('btnTurboConfirm').focus();
+      return;
+    }
+    confirmBox.hidden = true;
+    savePref('turbo_mode', false, { immediate: true, quiet: true });
+    toast('Modo Turbo desligado: ela volta a pedir aprovação.');
+  });
+  $('btnTurboCancel').addEventListener('click', () => { confirmBox.hidden = true; });
+  $('btnTurboConfirm').addEventListener('click', () => {
+    confirmBox.hidden = true;
+    box.checked = true;
+    savePref('turbo_mode', true, { immediate: true, quiet: true });
+    toast('Modo Turbo ligado. Excluir e reorganizar pastas ainda pedem aprovação.');
+  });
+}
+
+function setupDeepThinkingButton() {
+  $('btnDeepThinking').addEventListener('click', () => {
+    const on = !prefs.deep_thinking;
+    savePref('deep_thinking', on, { immediate: true, quiet: true });
+    toast(on ? 'Pensamento profundo ligado: ela pensa em voz alta antes de responder.'
+             : 'Pensamento profundo desligado.');
+  });
+}
+
 async function loadPreferences() {
   try {
     prefs = await api('/api/preferences');
@@ -283,10 +321,12 @@ async function loadPreferences() {
 
 let prefSaveTimer = null;
 let pendingPrefChanges = {};
+let pendingPrefsQuiet = true;
 
-function savePref(name, value, { immediate = false } = {}) {
+function savePref(name, value, { immediate = false, quiet = false } = {}) {
   prefs[name] = value;
   pendingPrefChanges[name] = value;
+  if (!quiet) pendingPrefsQuiet = false;
   applyAppearance();
   if (name === 'user_name') updateUserLabel();
   if (name.startsWith('life_')) updateLifeControls();
@@ -297,11 +337,13 @@ function savePref(name, value, { immediate = false } = {}) {
 
 async function flushPrefs() {
   const changes = pendingPrefChanges;
+  const quiet = pendingPrefsQuiet;
   pendingPrefChanges = {};
+  pendingPrefsQuiet = true;
   if (!Object.keys(changes).length) return;
   try {
     prefs = await api('/api/preferences', { method: 'POST', body: changes });
-    toast('Preferências salvas');
+    if (!quiet) toast('Preferências salvas');
   } catch (err) {
     toast(`Não salvei: ${err.message}`, 'error');
     await loadPreferences();
@@ -325,6 +367,10 @@ function applyAppearance() {
   messagesList.classList.toggle('hide-reasoning', prefs.show_reasoning === false);
   messagesList.classList.toggle('hide-tools', prefs.show_tool_events === false);
   $('suggestions').classList.toggle('on', prefs.show_suggestions !== false);
+  const deep = !!prefs.deep_thinking;
+  $('btnDeepThinking').setAttribute('aria-pressed', String(deep));
+  $('btnDeepThinking').classList.toggle('on', deep);
+  $('turboBadge').hidden = !prefs.turbo_mode;
   chatInput.placeholder = prefs.enter_to_send === false
     ? 'Escreva sua mensagem (Ctrl+Enter envia)'
     : `Pergunte qualquer coisa a ${activeProfileName()}`;
@@ -348,6 +394,8 @@ function fillPreferenceControls() {
     group.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.value === value));
   });
   $('valTemperature').textContent = Number(prefs.temperature ?? 0.7).toFixed(2);
+  $('prefTurbo').checked = !!prefs.turbo_mode;
+  $('turboConfirm').hidden = true;
   $('aboutCount').textContent = ($('prefUserAbout').value || '').length;
 }
 
@@ -392,6 +440,8 @@ function setupSettingsControls() {
       });
     });
   });
+
+  setupTurboSwitch();
 
   $('emojiLevel').querySelectorAll('button').forEach(btn => {
     btn.addEventListener('click', () => setEditorEmoji(Number(btn.dataset.value)));
@@ -450,6 +500,8 @@ async function checkHealth() {
     let label;
     if (backend === 'claude-code') {
       label = ok ? 'Claude Code pronto' : 'Claude Agent SDK ausente';
+    } else if (backend === 'codex') {
+      label = ok ? 'Codex pronto' : 'Codex não instalado';
     } else if (backend === 'ollama') {
       ok = !!data.ollama_online && data.default_model_installed !== false;
       label = !data.ollama_online ? 'Ollama desconectado'
@@ -479,7 +531,7 @@ async function checkHealth() {
 }
 
 function backendLabel(value) {
-  return { 'claude-code': 'Claude Code', ollama: 'Ollama', 'llama-cpp': 'llama.cpp', 'llama-cpp-server': 'llama.cpp' }[value] || value || '—';
+  return { 'claude-code': 'Claude Code', codex: 'Codex', ollama: 'Ollama', 'llama-cpp': 'llama.cpp', 'llama-cpp-server': 'llama.cpp' }[value] || value || '—';
 }
 
 async function initVoice() {
@@ -604,17 +656,32 @@ async function changeBackend(value) {
     updateModeUi();
     toast(`Modo: ${backendLabel(value)}`);
     await checkHealth();
+    if (value === 'codex') checkCodexInstalled();
   } catch (err) {
     toast(`Não foi possível trocar o modo: ${err.message}`, 'error');
     updateModeUi();
   }
 }
 
+// The Codex CLI is the user's to install; say how when it is missing.
+async function checkCodexInstalled() {
+  try {
+    const status = await api('/api/codex/status');
+    if (!status.installed) {
+      toast('O Codex não está instalado. Rode num terminal: npm install -g @openai/codex e depois codex login.', 'error');
+    }
+  } catch (_) { /* the chat explains it too */ }
+}
+
 function updateModeUi() {
-  const isClaude = currentBackend === 'claude-code';
+  const isCloud = currentBackend === 'claude-code' || currentBackend === 'codex';
   // llama-cpp-server is the same local engine as llama-cpp in the selector.
   $('modeSelect').value = currentBackend === 'llama-cpp-server' ? 'llama-cpp' : (currentBackend || 'llama-cpp');
-  $('claudeBadge').hidden = !isClaude;
+  const badge = $('claudeBadge');
+  badge.hidden = !isCloud;
+  const company = currentBackend === 'codex' ? 'OpenAI' : 'Anthropic';
+  badge.textContent = `Dados enviados à ${company}`;
+  badge.title = `Neste modo as mensagens são processadas pela ${company}, não no seu computador.`;
 }
 
 // ----------------- Profiles -----------------
@@ -1043,7 +1110,15 @@ function setEmptyState(empty) {
   chatMain.classList.toggle('is-empty', empty);
 }
 
+// The Biblioteca covers the chat; going to a conversation leaves it.
+function leaveLibrary() {
+  if (!window.VictoriqueLibrary || !window.VictoriqueLibrary.isOpen()) return;
+  const tab = document.querySelector('.nav-tab[data-tab="conversations"]');
+  if (tab) tab.click();
+}
+
 function startNewChat() {
+  leaveLibrary();
   if (isGenerating) abortGeneration(true);
   currentConversationId = null;
   currentChatTitle.textContent = 'Nova conversa';
@@ -1058,6 +1133,7 @@ function startNewChat() {
 }
 
 async function switchConversation(convId) {
+  leaveLibrary();
   if (isGenerating) {
     abortGeneration(true);
     await delay(450);
@@ -1081,7 +1157,9 @@ async function switchConversation(convId) {
     setEmptyState(false);
 
     data.messages.forEach(m => {
-      if (m.role === 'user' || m.role === 'assistant') renderMessage(m.role, m.content, m.sources);
+      if (m.role === 'user' || m.role === 'assistant') {
+        renderMessage(m.role, m.content, m.sources, { reasoning: m.reasoning, reasoningSeconds: m.reasoning_seconds });
+      }
     });
     scrollToBottom();
     await loadConversations();
@@ -1148,8 +1226,10 @@ async function sendMessage() {
   btnStop.hidden = false;
   activeAbortController = new AbortController();
   let accumulated = '';
-  let reasoningBody = null;
+  let reasoningBox = null;  // raciocínio interno do modelo
+  let thoughtBox = null;    // Pensamento profundo, na voz dela
   let aborted = false;
+  const deepThinking = !!prefs.deep_thinking;
 
   try {
     const response = await fetch('/api/chat', {
@@ -1164,6 +1244,7 @@ async function sendMessage() {
         project_id: currentProjectId,
         personality_id: currentPersonalityId,
         enable_rag: prefs.enable_rag !== false,
+        deep_thinking: deepThinking,
       })
     });
 
@@ -1205,6 +1286,7 @@ async function sendMessage() {
         } else if (data.type === 'sources') {
           renderCitations(citationsContainer, data.data || []);
         } else if (data.type === 'tool_call') {
+          if (thoughtBox) thoughtBox.setLive(false);
           const args = JSON.stringify(data.arguments || {});
           appendToolEvent(
             toolBox,
@@ -1223,6 +1305,7 @@ async function sendMessage() {
             if (detail.length > 300) detail = detail.slice(0, 300) + '…';
           }
           const ok = data.status === 'success';
+          if (ok && window.VictoriqueLibrary) window.VictoriqueLibrary.notifyActivity();
           appendToolEvent(
             toolBox,
             `${ok ? '✓' : '!'} ${data.tool} (${data.status})${detail ? ' — ' + detail : ''}`,
@@ -1236,25 +1319,29 @@ async function sendMessage() {
           );
           checkPendingAuthorizations(true);
         } else if (data.type === 'reasoning') {
-          // Model's internal reasoning: shown collapsed, never part of the answer.
-          if (!reasoningBody) {
-            const details = document.createElement('details');
-            details.className = 'reasoning-box';
-            const summary = document.createElement('summary');
-            summary.innerHTML = `${icon('sparkle', 'ic ic-sm')}Raciocínio`;
-            reasoningBody = document.createElement('div');
-            reasoningBody.className = 'reasoning-body';
-            details.appendChild(summary);
-            details.appendChild(reasoningBody);
-            body.insertBefore(details, toolDetails);
+          // Never part of the answer. data.voice = her own thought (Pensamento
+          // profundo), shown like DeepSeek; otherwise the model's internal one.
+          if (data.voice) {
+            if (!thoughtBox) {
+              thoughtBox = createThoughtBox(true, { live: true });
+              body.insertBefore(thoughtBox.el, toolDetails);
+              if (bubble.querySelector('.thinking')) bubble.innerHTML = '';
+            }
+            thoughtBox.append(data.content || '');
+          } else {
+            if (!reasoningBox) {
+              reasoningBox = createThoughtBox(false);
+              body.insertBefore(reasoningBox.el, toolDetails);
+            }
+            reasoningBox.append(data.content || '');
           }
-          reasoningBody.textContent += data.content || '';
           scrollToBottom(true);
         } else if (data.type === 'notice') {
           appendToolEvent(toolBox, `${data.message}`, 'tool-event-notice');
         } else if (data.type === 'avatar') {
           sendMascotSignal({ expression: data.expression || null, gesture: data.gesture || null });
         } else if (data.type === 'token') {
+          if (thoughtBox) thoughtBox.setLive(false);
           if (!visual.streaming) { visual.streaming = true; refreshVisualState(); }
           accumulated += data.content || '';
           bubble.innerHTML = md(accumulated);
@@ -1266,7 +1353,9 @@ async function sendMessage() {
           markVisualError();
           body.insertBefore(errBox, citationsContainer);
         } else if (data.type === 'done') {
+          if (thoughtBox) thoughtBox.finish(data.reasoning_seconds);
           refreshOrganizerIfOpen();
+          if (window.VictoriqueLibrary) window.VictoriqueLibrary.notifyActivity();
           if (data.conversation_id) currentConversationId = data.conversation_id;
           accumulated = data.content || accumulated;
           bubble.innerHTML = md(accumulated);
@@ -1289,6 +1378,7 @@ async function sendMessage() {
     isGenerating = false;
     visual.generating = false;
     visual.streaming = false;
+    if (thoughtBox) thoughtBox.setLive(false);
     if (accumulated && prefs.tts_speak_responses && ttsAvailable) markSpeaking(accumulated);
     refreshVisualState();
     if (accumulated && !aborted) tellMascotReply(accumulated);
@@ -1324,7 +1414,7 @@ function abortGeneration(silent = false) {
   }
 }
 
-function renderMessage(role, content, sources = null) {
+function renderMessage(role, content, sources = null, { reasoning = '', reasoningSeconds = null } = {}) {
   const msg = document.createElement('div');
   msg.className = `message ${role}`;
   const bubble = document.createElement('div');
@@ -1343,6 +1433,7 @@ function renderMessage(role, content, sources = null) {
     const body = document.createElement('div');
     body.className = 'msg-body';
     bubble.innerHTML = md(content || '');
+    if (reasoning) body.appendChild(createThoughtBox(true, { text: reasoning, seconds: reasoningSeconds }).el);
     body.appendChild(bubble);
     if (sources && sources.length > 0) {
       const box = document.createElement('div');
@@ -2093,12 +2184,6 @@ window.assistantApp = {
 // This page computes her operational state, shows it in the sidebar and
 // forwards it, plus the model's [expression]/[gesture] picks, to the mascot.
 // Priority: ouvindo > pensando > falando > erro > dormindo.
-const PIPE_SVG = `<svg class="pipe" viewBox="0 0 48 48" aria-hidden="true">
-  <path class="pipe-smoke s1" d="M31 21c-3-3 3-5 0-8s3-5 0-8"/>
-  <path class="pipe-smoke s2" d="M35 22c-2-3 2-4 0-7s2-4 0-6"/>
-  <path class="pipe-smoke s3" d="M27 22c-2-2 2-4 0-6s2-4 0-5"/>
-  <path class="pipe-stem" d="M3 29c9 0 15 1 21 3"/>
-  <path class="pipe-bowl" d="M23 24h14v8a7 7 0 0 1-14 0z"/></svg>`;
 const STATE_LABELS = {
   acordada: 'Acordada', dormindo: 'Cochilando entre os livros', ouvindo: 'Ouvindo',
   pensando: 'Pensando', falando: 'Falando', erro: 'Algo deu errado',
@@ -2208,7 +2293,11 @@ function initVisualState() {
     }
   });
   // Called by the desktop mascot (run.py) when "Aceitar o Caso" is clicked there.
-  window.victoriqueDesktop = { acceptCase: event => acceptLifeCase(event) };
+  window.victoriqueDesktop = {
+    acceptCase: event => acceptLifeCase(event),
+    // "Abrir na janela grande" in the small chat by her side.
+    openConversation: id => switchConversation(String(id)),
+  };
 }
 
 // ----------------- Vida própria -----------------

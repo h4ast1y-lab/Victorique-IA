@@ -154,6 +154,14 @@ class Settings(BaseModel):
     )
     # Modelo do Claude Code; vazio = padrão do Claude Code.
     claude_code_model: str = os.environ.get("ASSISTANT_CLAUDE_MODEL", "")
+    # ----------------- Codex (CLI da OpenAI, `codex exec`) -----------------
+    # Pasta onde o Codex trabalha (somente leitura); padrão: a mesma do Claude Code.
+    codex_workspace: str = os.environ.get(
+        "ASSISTANT_CODEX_WORKSPACE",
+        os.environ.get("ASSISTANT_CLAUDE_WORKSPACE", str(Path.home() / "Documents")),
+    )
+    # Modelo do Codex; vazio = padrão da conta. Executável: PATH ou ASSISTANT_CODEX_PATH.
+    codex_model: str = os.environ.get("ASSISTANT_CODEX_MODEL", "")
     # Se True, inicia o llama-server automaticamente ao subir o app.
     llama_cpp_auto_start: bool = os.environ.get(
         "ASSISTANT_LLAMA_CPP_AUTO_START", "1"
@@ -172,6 +180,6 @@ class Settings(BaseModel):
 
 
 # Backends accepted by the chat API and the mode selector.
-VALID_BACKENDS = ("llama-cpp", "llama-cpp-server", "ollama", "claude-code")
+VALID_BACKENDS = ("llama-cpp", "llama-cpp-server", "ollama", "claude-code", "codex")
 
 settings = Settings()

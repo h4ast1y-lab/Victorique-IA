@@ -29,6 +29,11 @@ COLUMN_MIGRATIONS = [
     ("personalities", "emoji_level", "INTEGER DEFAULT 2"),
     # Casos (projects) can be archived instead of deleted.
     ("projects", "archived", "INTEGER DEFAULT 0"),
+    # Pensamento Profundo: the thought shown above an answer, and how long it took.
+    ("messages", "reasoning", "TEXT"),
+    ("messages", "reasoning_seconds", "REAL"),
+    # Codex thread resumed by each conversation in codex mode.
+    ("conversations", "codex_thread_id", "TEXT"),
 ]
 
 

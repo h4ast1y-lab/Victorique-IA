@@ -127,12 +127,22 @@ def _tell_life(kind: str, description: str, moved: int) -> None:
         pass
 
 
+def _tell_library(kind: str, moves: List[Move]) -> None:
+    """She carries the books in the Biblioteca (app/library)."""
+    try:
+        from app.library import activity  # lazy: UI-facing, never blocks the operation
+        activity.record_moves(kind, moves)
+    except Exception:
+        pass
+
+
 def _run(kind: str, description: str, moves: List[Move]) -> Dict[str, Any]:
     with _lock:
         _validate(moves)
         _apply(moves)
         batch = _record(kind, description, moves)
     _tell_life(kind, description, len(moves))
+    _tell_library(kind, moves)
     return {
         "status": "done",
         "batch_id": batch["id"],
@@ -225,4 +235,5 @@ def undo(batch_id: Optional[str] = None) -> Dict[str, Any]:
         batch["status"] = "undone"
         batch["undone_at"] = datetime.now().isoformat(timespec="seconds")
         _write_log(batches)
+    _tell_library("undo", reverse)
     return {"status": "undone", "batch_id": batch["id"], "restored": len(reverse)}

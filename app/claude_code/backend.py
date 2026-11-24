@@ -23,7 +23,9 @@ from claude_agent_sdk import (
 from app.claude_code.options import build_options
 from app.claude_code.permissions import PermissionBridge
 from app.config import settings
+from app.library import activity
 from app.core.avatar_protocol import AVATAR_INSTRUCTIONS, AvatarControlParser
+from app.core.deep_thinking import DEEP_THINKING_INSTRUCTIONS, THOUGHT_ONLY_NOTE, ThoughtRouter
 from app.core.dialogue_style import style_note
 from app.core.personality import personality_manager
 from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
@@ -116,7 +118,7 @@ def _result_text(content: Any) -> str:
 class _Turn:
     """State of one turn, fed by the SDK messages."""
 
-    def __init__(self, emit: Callable[[Any], None]):
+    def __init__(self, emit: Callable[[Any], None], deep_thinking: bool = False):
         self.emit = emit
         self.parts: List[str] = []
         self.tool_trace: List[Dict[str, Any]] = []
@@ -128,7 +130,10 @@ class _Turn:
         self.separate = False
         self.client: Any = None
         self.cancelled = False
-        self.avatar = AvatarControlParser()
+        # Splits her <pensamento> block (Pensamento Profundo) and the hidden
+        # avatar markers out of the answer text.
+        self.router = ThoughtRouter(deep_thinking)
+        self.router.new_block(AvatarControlParser())
 
     def text(self) -> str:
         return "".join(self.parts)
@@ -139,17 +144,18 @@ class _Turn:
 
     def _start_text_block(self) -> None:
         """A new text block after earlier text (e.g. after a tool) starts a new paragraph."""
-        if self.parts or self.tools:
-            # The final answer (after tools) may pick its own expression.
+        if self.parts or self.tools or self.router.thought:
+            # The final answer (after tools) may pick its own expression and think again.
             self.finish_text()
-            self.avatar = AvatarControlParser()
+            self.router.new_block(AvatarControlParser())
         self.separate = bool(self.parts)
 
-    def _add_text(self, text: str) -> None:
-        controls, chunks = self.avatar.feed(text)
-        for control in controls:
-            self._out(control)
-        for chunk in chunks:
+    def _emit_routed(self, events: List[Dict[str, Any]]) -> None:
+        for event in events:
+            if event.get("type") != "token":
+                self._out(event)
+                continue
+            chunk = event["content"]
             if self.separate:
                 self.separate = False
                 if not self.text().endswith("\n"):
@@ -157,14 +163,14 @@ class _Turn:
             self.parts.append(chunk)
             self._out({"type": "token", "content": chunk})
 
+    def _add_text(self, text: str) -> None:
+        events, _chunks = self.router.feed(text)
+        self._emit_routed(events)
+
     def finish_text(self) -> None:
-        """Releases text the avatar parser held back (e.g. a lone "[")."""
-        controls, chunks = self.avatar.finish()
-        for control in controls:
-            self._out(control)
-        for chunk in chunks:
-            self.parts.append(chunk)
-            self._out({"type": "token", "content": chunk})
+        """Releases text held back (a lone "[", an unfinished thought)."""
+        events, _chunks = self.router.finish_block()
+        self._emit_routed(events)
 
     def handle(self, message: Any) -> None:
         if isinstance(message, StreamEvent):
@@ -194,7 +200,8 @@ class _Turn:
             self.delta_since_message = True
             self._add_text(delta["text"])
         elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
-            self._out({"type": "reasoning", "content": delta["thinking"]})
+            for payload in self.router.native(delta["thinking"]):
+                self._out(payload)
 
     def _assistant(self, message: AssistantMessage) -> None:
         if message.error:
@@ -223,6 +230,8 @@ class _Turn:
                 continue
             call = self.tools.get(block.tool_use_id, {"tool": "ferramenta", "arguments": {}})
             status = "error" if block.is_error else "success"
+            if status == "success":
+                activity.record_tool(call["tool"], call["arguments"])
             output = truncate(_result_text(block.content), TRACE_RESULT_CHARS)
             self.tool_trace.append({
                 "tool": call["tool"],
@@ -307,6 +316,8 @@ class ClaudeCodeBackend:
                 role="assistant",
                 content=content,
                 tool_trace=turn.tool_trace or None,
+                reasoning=turn.router.thought or None,
+                reasoning_seconds=turn.router.seconds,
             )
         except Exception as exc:
             logger.error("Failed to save Claude Code answer: %s", exc)
@@ -318,15 +329,18 @@ class ClaudeCodeBackend:
         user_message: str,
         project_id: Optional[str],
         personality_id: Optional[str],
+        deep_thinking: bool = False,
     ) -> AsyncGenerator[str, None]:
         """Yields SSE strings. The caller has already saved the user message."""
         queue: asyncio.Queue = asyncio.Queue()
         bridge = PermissionBridge(emit=queue.put_nowait, conversation_id=conversation_id)
-        turn = _Turn(queue.put_nowait)
+        turn = _Turn(queue.put_nowait, deep_thinking=deep_thinking)
         resume = conversation_store.get_claude_session(conversation_id)
         append_prompt = build_append_prompt(
             project_id, personality_id, conversation_store.get_messages(conversation_id, limit=30)
         )
+        if deep_thinking:
+            append_prompt += "\n\n" + DEEP_THINKING_INSTRUCTIONS
 
         def make_options(resume_id: Optional[str]):
             return build_options(
@@ -359,26 +373,29 @@ class ClaudeCodeBackend:
                 if turn.session_id:
                     conversation_store.set_claude_session(conversation_id, turn.session_id)
                 if not content.strip():
-                    content = NO_TEXT_FALLBACK
+                    content = THOUGHT_ONLY_NOTE if turn.router.thought else NO_TEXT_FALLBACK
                 if settings.tts_enabled and settings.tts_speak_responses and tts_engine.available:
                     tts_engine.speak_async(content)
 
             saved = self._save(conversation_id, content, turn)
             finished = True
-            yield sse_event({
+            done = {
                 "type": "done",
                 "conversation_id": conversation_id,
                 "message_id": saved["id"] if saved else None,
                 "content": content,
                 "tool_calls": len(turn.tool_trace),
                 "backend": "claude-code",
-            })
+            }
+            if turn.router.thought:
+                done["reasoning_seconds"] = turn.router.seconds
+            yield sse_event(done)
         except (GeneratorExit, asyncio.CancelledError):
             if not finished:
                 turn.cancelled = True
                 bridge.cancel_pending()
                 partial = turn.text().strip()
-                if partial:
+                if partial or turn.router.thought:
                     self._save(conversation_id, partial + CANCELLED_MARKER, turn)
                 if consumer is not None and not consumer.done():
                     # Runs outside this generator: the caller's cancel scope

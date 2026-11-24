@@ -99,3 +99,20 @@ def test_engine_failure_reaches_the_ui_as_an_error_event(client, monkeypatch):
     assert r.status_code == 200
     assert '"type": "error"' in r.text and "motor desligado" in r.text
     assert '"type": "done"' in r.text
+
+
+def test_turbo_preference_updates_live_setting(client):
+    original = client.get("/api/preferences").json()
+    assert original["turbo_mode"] is False  # opt-in
+    try:
+        assert client.post("/api/preferences", json={"turbo_mode": True}).status_code == 200
+        assert settings.turbo_mode is True
+        assert client.post("/api/preferences", json={"turbo_mode": "sim"}).status_code == 400
+    finally:
+        _restore(client, original)
+    assert settings.turbo_mode is False
+
+
+def test_system_prompt_asks_for_latex():
+    prompt = personality_manager.build_system_prompt()
+    assert "LaTeX" in prompt and "$$" in prompt and "R$ 10" in prompt

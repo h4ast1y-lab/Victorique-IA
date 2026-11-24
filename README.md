@@ -322,6 +322,12 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 | Backend llama.cpp (servidor local) | implementado via `llama-server.exe` + `Qwen_Qwen3.5-9B-IQ4_XS.gguf` (5,5 GB); E2E real passou (`144 × 15 = 2160`); Ollama continua como alternativa |
 | Ollama como backend alternativo | implementado; `qwen2.5-coder:7b` e `qwen2.5:3b` disponíveis |
 | Vida própria: tédio (propõe um Caso) e comentários avulsos, com Silêncio e não perturbar | implementado; testado automaticamente, no navegador e com o Claude Code real (seção 13) |
+| Pensamento profundo: ela pensa em voz alta, na voz dela, antes de responder (como no DeepSeek) | implementado nos três modos; testado automaticamente e no navegador (seção 15) |
+| Botão do Modo Turbo nas Configurações, com confirmação e selo na caixa de mensagem | implementado; testado automaticamente e no navegador (seção 15) |
+| Matemática em LaTeX (KaTeX local, sem internet) | implementado; testado automaticamente (Node) e no navegador (seção 15) |
+| Conversa rápida: um clique na mascote abre uma janelinha de chat ao lado dela | implementado; testado automaticamente e a página no navegador; o clique na mascote real não foi automatizado (seção 16) |
+| Biblioteca: salão em pixel art, uma estante por pasta e um livro por arquivo; ela encena o que faz nos arquivos | implementado; testado automaticamente e no navegador, com uma ação real do organizador (seção 17) |
+| Modo Codex (CLI da OpenAI), somente leitura | implementado; testado com um processo falso; não testado com o Codex real (seção 18) |
 
 ---
 
@@ -352,9 +358,19 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 - `GET /api/ping` (responde na hora, sem checar backends; usado pelo `run.py`)
 - `GET /api/claude-code/status` (SDK instalado, caminho do `claude.exe`, pasta de
   trabalho, modelo e último erro)
+- `GET /api/codex/status` (Codex instalado, comando, pasta de trabalho, modelo,
+  último erro e os passos de instalação)
+- `GET/POST /api/library/sections`, `DELETE /api/library/sections/{id}`,
+  `GET /api/library/sections/{id}/books`, `GET /api/library/activity?since=N`,
+  `POST /api/library/pick-folder` (Biblioteca, seção 17)
+- `GET /api/mascot/atlas` e `GET /api/mascot/atlas.json` (sprites dela para a
+  Biblioteca), `POST /api/mascot/open-conversation` (a conversa rápida passa a
+  conversa para a janela grande)
 - `GET/POST /api/settings` também lê e grava `default_backend` (`llama-cpp`,
-  `llama-cpp-server`, `ollama` ou `claude-code`) e lista `available_backends`.
-  `POST /api/chat` aceita `backend` para escolher o modo de uma mensagem.
+  `llama-cpp-server`, `ollama`, `claude-code` ou `codex`) e lista `available_backends`.
+  `POST /api/chat` aceita `backend` para escolher o modo de uma mensagem e
+  `deep_thinking` para o Pensamento profundo. O evento `reasoning` com `voice: true`
+  é o pensamento dela; o `done` traz `reasoning_seconds`.
 
 O evento SSE `meta` chega antes dos tokens e já contém `conversation_id`; o evento
 `done` também o envia. Assim, uma conversa nova não se perde se a geração for cancelada.
@@ -376,8 +392,8 @@ O evento SSE `meta` chega antes dos tokens e já contém `conversation_id`; o ev
   tool calling (JSON textual, `tool_calls` nativo, ferramenta protegida pendente,
   limite de rodadas, fallback sem suporte), OCR de PDF só-imagem, voz (TTS/STT) e
   servidor llama.cpp.
-- Resultado desta rodada: **71 testes passando** (os testes marcados `live_ollama`
-  requerem o Ollama rodando e são pulados quando ele está offline).
+- Resultado da rodada de 24/11/2026: **339 testes passando e 3 pulados** (os testes
+  marcados `live_ollama` requerem o Ollama rodando e são pulados quando ele está offline).
 - A suíte roda com os padrões de fábrica (turbo e acesso total desligados).
 - E2E real com `llama-cpp-server` + `Qwen_Qwen3.5-9B-IQ4_XS.gguf`: chat funcionou
   corretamente (`144 × 15 = 2160`).
@@ -395,17 +411,21 @@ O evento SSE `meta` chega antes dos tokens e já contém `conversation_id`; o ev
 run.py, run.bat
 app/
   config.py, main.py
-  core/       assistant.py, context_builder.py, personality.py, backup.py
+  core/       assistant.py, context_builder.py, personality.py, backup.py, deep_thinking.py
   models/     ollama_client.py, llama_cpp_client.py, llama_cpp_server_client.py
   voice/      __init__.py   (TTS pyttsx3/SAPI5 + STT SpeechRecognition/Sphinx)
   memory/     database.py, conversation_store.py, memory_store.py, project_store.py
   life/       observer.py, policy.py, folders.py, lines.py, generator.py, service.py
+  library/    sections.py (seções = pastas), activity.py (o que ela faz nos arquivos)
+  claude_code/ backend.py, options.py, permissions.py, victorique_tools.py
+  codex/      backend.py  (modo Codex: `codex exec --json`, somente leitura)
   mascot/     sprite.py, behavior.py, surfaces.py, balloon.py, win32.py, desktop.py, bus.py,
               launcher.py, assets/ (victorique.webp + victorique.json; source/ com as 20 folhas)
   rag/        document_loader.py, text_splitter.py, vector_store.py
   security/   path_guard.py, permissions.py
   tools/      registry.py, file_tools.py, system_tools.py, web_search.py
-  ui/         index.html, css/style.css, js/app.js, js/markdown.js, favicon.svg
+  ui/         index.html, mini.html, css/ (style.css, mini.css),
+              js/ (app.js, markdown.js, thought.js, library.js, mini.js), vendor/katex/
 scripts/      build_mascot_sprites.py  (gera o atlas da mascote a partir das folhas)
 tests/
 data/         assistant.db, documents/, backups/  (não versionar)
@@ -482,7 +502,8 @@ com o comando acima.
   (120 s), nega a ação. Comandos que o Claude Code classifica como só leitura (por
   exemplo `ls` na pasta de trabalho) rodam sem perguntar.
 - Escrever no código do app, no banco ou nos backups é **negado sem perguntar**.
-- **Modo turbo** (`ASSISTANT_TURBO_MODE=1`): escritas e edições são aprovadas
+- **Modo turbo** (interruptor em Configurações → Modelo e respostas, ou
+  `ASSISTANT_TURBO_MODE=1`): escritas e edições são aprovadas
   automaticamente (como o `acceptEdits` do Claude Code), mas comandos e internet
   continuam pedindo, e os caminhos protegidos continuam negados.
 - Toda decisão vai para `audit_logs`.
@@ -586,9 +607,9 @@ só uma linha com o estado dela e a lua do não perturbar.
 - **Com o mouse:** arraste-a pela mão (o cursor do Windows some e ela aparece segurando
   um cursor desenhado). Solta, ela cai no que estiver embaixo: a borda de uma janela ou
   a barra de tarefas do monitor. Um movimento rápido ao soltar a arremessa. Um clique dá
-  uma reação; dois cliques abrem a conversa; o botão direito abre o menu (abrir a
-  conversa, ficar parada, Silêncio de 2 horas, não perturbar, esconder, encerrar o
-  assistente).
+  uma reação e abre a conversa rápida ao lado dela (seção 16); dois cliques abrem a
+  janela grande; o botão direito abre o menu (abrir a conversa, conversa rápida, ficar
+  parada, Silêncio de 2 horas, não perturbar, esconder, encerrar o assistente).
 - **Estados:** pensando, ela para com ar pensativo; falando, mexe a boca; ouvindo, fica
   atenta; erro, fica contrariada e treme; sem interação (minutos configuráveis), senta
   e dorme com «z z z».
@@ -650,3 +671,128 @@ janela foi arrastada, sentou na beirada, escalou a lateral e caiu na barra de ta
 quando a janela fechou. No app completo
 (`run.py`): a fala chegou ao balão, fechar a janela só a escondeu, e «Aceitar o Caso»
 no balão reabriu a conversa com o Caso criado.
+
+---
+
+## 15. Pensamento profundo, Modo Turbo e matemática
+
+**Pensamento profundo.** O botão com a lâmpada, ao lado do perfil na caixa de mensagem,
+liga e desliga. Ligado, ela pensa em voz alta antes de responder, no próprio tom, num
+bloco `<pensamento>` que o app separa da resposta, do jeito que o DeepSeek mostra o
+raciocínio. Durante a resposta aparece «Pensando…» com o texto chegando; no fim, a caixa
+fecha e mostra «Pensou por N s», e um clique a abre de novo. O pensamento fica salvo
+com a mensagem (`messages.reasoning`) e volta ao reabrir a conversa. Vale nos modos
+local, Claude Code e Codex. Com ele ligado, o raciocínio interno do modelo fica
+escondido; a opção «Mostrar raciocínio» das Configurações só afeta esse raciocínio
+interno.
+
+**Modo Turbo.** Configurações → Modelo e respostas → «Modo Turbo». Ligar pede
+confirmação; ligado, aparece o selo «Turbo» na caixa de mensagem. No modo local, escrever
+arquivos e usar a internet deixam de pedir aprovação; no Claude Code, só escritas e
+edições (seção 12). Excluir continua pedindo, e os caminhos protegidos continuam negados.
+No Codex não muda nada, porque ele só lê. A escolha fica salva nas preferências.
+
+**Matemática.** As respostas com fórmulas usam LaTeX: `$...$` dentro da frase e `$$...$$`
+(ou `\[...\]`) em linha própria; `\(...\)` também vale. O desenho é feito pelo KaTeX
+0.16.11, que vem junto em `app/ui/vendor/katex/` (licença MIT), sem nenhuma conexão.
+Valores como R$ 10 continuam como texto, e fórmulas dentro de código não são
+desenhadas. Uma fórmula inválida aparece como código, sem quebrar a mensagem.
+
+---
+
+## 16. Conversa rápida pela mascote
+
+Um clique na Victorique da área de trabalho abre uma janelinha de conversa (380 × 540,
+sempre por cima) ao lado dela; outro clique a fecha. O clique espera o tempo de duplo
+clique do Windows, para que dois cliques continuem abrindo a janela grande. A conversa
+rápida usa o mesmo modo, perfil, Pensamento profundo e LaTeX da janela grande, e tem a
+própria conversa («Conversa rápida», guardada em `mini_conversation_id`). O botão de
+expandir leva a conversa para a janela grande; Esc fecha a janelinha. O menu do botão
+direito também tem «Conversa rápida».
+
+---
+
+## 17. Biblioteca
+
+A aba **Biblioteca** é um salão em pixel art onde a Victorique passeia. Cada seção é uma
+pasta do computador e vira uma estante com uma plaquinha de latão; cada arquivo é um
+livro, com a cor pelo tipo (PDF vermelho, planilhas verdes, imagens azul-esverdeado…) e a
+altura pelo tamanho. A antiga aba de documentos indexados agora se chama **Documentos**.
+
+- **Seções padrão:** Downloads, Documentos, Área de Trabalho, Imagens, Músicas e Vídeos,
+  as que existirem (pelas pastas conhecidas do Windows, seguindo o OneDrive). Elas não
+  são criadas com `ASSISTANT_LIBRARY_DEFAULTS=0` nem quando `ASSISTANT_AUTHORIZED_DIRS`
+  limita as pastas.
+- **Novas seções:** «Nova seção» na barra lateral, com o caminho ou «Escolher…» (seletor
+  de pastas do aplicativo). Ficam de fora: uma unidade inteira, a pasta do usuário
+  inteira, pastas do Windows, de programas e do AppData e as pastas do próprio app. Até
+  24 seções. Desvincular (dois cliques no ×) não mexe na pasta.
+- **Permissões:** cada seção vira uma pasta autorizada. Ela lê e lista à vontade lá;
+  criar, mover e excluir continuam pedindo aprovação.
+- **No salão:** as estantes mostram os 120 arquivos mais recentes de cada pasta (só nome,
+  tamanho e data; o conteúdo não é lido). Passar o mouse mostra o nome; clicar abre um
+  cartão com estante, tamanho, data, caminho e «Pedir para ela ler». Clique nela para uma
+  reação. Arraste, use a roda do mouse ou as setas para olhar o salão; a câmera para
+  enquanto o mouse está sobre ele. A janela mostra o céu da hora do dia.
+- **O que ela faz vira cena:** mover, renomear, mandar para a Reserva e desfazer (pelo
+  organizador), ler, listar e escrever (ferramentas locais, do Claude Code e leituras
+  do Codex). Ela vai até a estante e lê, consulta, escreve ou leva o livro para outra
+  estante ou para o carrinho da Reserva. Com a aba fechada, as ações viram um contador
+  na aba, e ela as encena quando você abre (até 14). Sem nada para fazer, ela passeia,
+  lê, toma chá, pensa e cochila.
+- **Onde fica:** as seções em `data/library.json`; as ações só na memória (as últimas 200).
+
+Verificação em 24/11/2026: `tests/test_library.py` (11 testes) e a página no navegador
+com três pastas de teste: estantes, cartão do livro, formulário com erro e uma ação real
+do organizador desfeita pelo servidor, com ela carregando o PDF de volta à estante certa.
+
+---
+
+## 18. Modo Codex
+
+A Victorique também pode responder pelo **Codex**, o CLI da OpenAI. O app não instala
+nada: o Codex é seu.
+
+### Instalação e login (uma vez)
+
+```bat
+npm install -g @openai/codex
+codex login
+```
+
+O `npm` vem com o Node.js (https://nodejs.org). O `codex login` entra com a sua conta do
+ChatGPT ou com uma chave da API da OpenAI e consome a sua cota. Sem o Codex, a conversa
+mostra esses passos, e `GET /api/codex/status` diz se ele foi encontrado.
+
+### Como funciona
+
+- Escolha **Codex** no seletor de modo. O selo passa a dizer «Dados enviados à OpenAI».
+- Cada mensagem roda `codex exec --json --skip-git-repo-check --sandbox read-only -C <pasta> -`
+  com o texto pelo stdin. Os eventos JSONL viram os mesmos eventos da interface: texto,
+  raciocínio, comandos (como «Shell»), buscas na web, ferramentas MCP, plano e erros.
+- **Somente leitura:** o Codex pode ler e listar arquivos para responder, mas não altera
+  nada. Pedidos de mover, renomear ou apagar ficam para o modo local ou o Claude Code,
+  que pedem a sua aprovação.
+- Cada conversa tem a própria sessão do Codex (`conversations.codex_thread_id`),
+  retomada com `codex exec resume`. Se a sessão não puder ser retomada, o app começa
+  outra com um resumo das últimas 12 mensagens e avisa.
+- A persona, o caso ativo, os marcadores de expressão e a regra de responder em pt-BR
+  vão no começo de cada sessão nova; nas retomadas vai só um lembrete curto.
+- As leituras do Codex aparecem na Biblioteca. Parar a geração encerra o processo e
+  salva a resposta parcial.
+
+### Configuração
+
+| Variável | Padrão | Uso |
+|---|---|---|
+| `ASSISTANT_CODEX_WORKSPACE` | a pasta do Claude Code (`~/Documents`) | Pasta onde o Codex trabalha |
+| `ASSISTANT_CODEX_MODEL` | vazio | Modelo do Codex; também em Configurações → «Modelo do Codex» |
+| `ASSISTANT_CODEX_PATH` | vazio | Caminho do executável, se o `codex` não estiver no PATH |
+
+### Verificação
+
+`tests/test_codex_backend.py` (7 testes, com um processo falso): o comando só leitura e
+a retomada, a tradução dos eventos, o Codex ausente, a retomada que falha, o login
+inválido, o Pensamento profundo e a ligação com o app. No navegador, em 24/11/2026: o
+seletor, o selo e a ajuda de instalação no chat. O Codex não estava instalado nesta
+máquina, então ainda não houve um teste com o Codex real.

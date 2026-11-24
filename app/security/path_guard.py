@@ -120,6 +120,11 @@ class PathGuard:
         if resolved not in self.authorized_dirs:
             self.authorized_dirs.append(resolved)
 
+    def remove_authorized_directory(self, path: str):
+        resolved = Path(path).expanduser().resolve()
+        if resolved in self.authorized_dirs:
+            self.authorized_dirs.remove(resolved)
+
     def add_protected_path(self, path: str):
         resolved = Path(path).expanduser().resolve()
         if resolved not in self.protected_write_paths:

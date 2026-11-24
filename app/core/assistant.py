@@ -14,6 +14,7 @@ from app.voice import tts_engine
 from app.models.events import ReasoningDelta
 from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
 from app.core.avatar_protocol import AvatarControlParser, split_leading_controls
+from app.core.deep_thinking import DEEP_THINKING_INSTRUCTIONS, THOUGHT_ONLY_NOTE, ThoughtRouter
 
 logger = logging.getLogger("assistant")
 
@@ -136,6 +137,8 @@ class AssistantEngine:
         content: str,
         sources: Optional[list],
         tool_trace: Optional[list] = None,
+        reasoning: Optional[str] = None,
+        reasoning_seconds: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         try:
             return conversation_store.add_message(
@@ -144,6 +147,8 @@ class AssistantEngine:
                 content=content,
                 sources=sources or None,
                 tool_trace=tool_trace or None,
+                reasoning=reasoning or None,
+                reasoning_seconds=reasoning_seconds,
             )
         except Exception as e:
             logger.error(f"Failed to save assistant message: {e}")
@@ -257,7 +262,8 @@ class AssistantEngine:
         backend: Optional[str] = None,
         project_id: Optional[str] = None,
         personality_id: Optional[str] = None,
-        enable_rag: bool = True
+        enable_rag: bool = True,
+        deep_thinking: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
         Orchestrates one conversation turn and yields SSE JSON events:
@@ -295,7 +301,17 @@ class AssistantEngine:
                 yield _event({"type": "done", "conversation_id": conversation_id, "content": message})
                 return
             async for chunk in claude_code_backend.run_turn(
-                conversation_id, user_message, project_id, personality_id
+                conversation_id, user_message, project_id, personality_id,
+                deep_thinking=deep_thinking,
+            ):
+                yield chunk
+            return
+
+        if (backend or "").strip().lower() == "codex":
+            from app.codex.backend import codex_backend
+            async for chunk in codex_backend.run_turn(
+                conversation_id, user_message, project_id, personality_id,
+                deep_thinking=deep_thinking,
             ):
                 yield chunk
             return
@@ -354,6 +370,7 @@ class AssistantEngine:
                     return
 
         full_response_parts: List[str] = []
+        router = ThoughtRouter(deep_thinking)
         sources: list = []
         saved_id: Optional[str] = None
         finished = False
@@ -390,6 +407,10 @@ class AssistantEngine:
             max_rounds = max(0, int(settings.max_tool_rounds))
             max_calls = max(1, int(settings.max_tool_calls_per_round))
 
+            system_prompt = ctx["system_prompt"]
+            if deep_thinking:
+                system_prompt += "\n\n" + DEEP_THINKING_INSTRUCTIONS
+
             for round_index in range(max_rounds + 1):
                 state: Dict[str, Any] = {
                     "buffering": bool(tools_enabled),
@@ -401,28 +422,27 @@ class AssistantEngine:
                     "backend_name": backend_name,
                 }
                 # Each round may follow a tool call; the final round still gets
-                # to pick the figure's expression and gesture.
-                avatar_parser = AvatarControlParser()
+                # to pick the figure's expression and gesture (and may think again).
+                router.new_block(AvatarControlParser())
 
                 try:
                     async for token in self._stream_model_round(
                         state,
                         messages=working_messages,
                         model=selected_model,
-                        system_prompt=ctx["system_prompt"],
+                        system_prompt=system_prompt,
                         max_tokens=settings.max_output_tokens,
                         temperature=settings.temperature,
                         tools=tool_schemas if tools_enabled else None,
                     ):
                         if isinstance(token, ReasoningDelta):
-                            yield _event({"type": "reasoning", "content": token.text})
+                            for event in router.native(token.text):
+                                yield _event(event)
                             continue
-                        controls, chunks = avatar_parser.feed(token)
-                        for control in controls:
-                            yield _event(control)
-                        for chunk in chunks:
-                            full_response_parts.append(chunk)
-                            yield _event({"type": "token", "content": chunk})
+                        events, chunks = router.feed(token)
+                        full_response_parts.extend(chunks)
+                        for event in events:
+                            yield _event(event)
                 except RuntimeError as exc:
                     # Some local models do not support the tools API. Fall back
                     # to plain chat instead of failing the whole turn.
@@ -448,29 +468,26 @@ class AssistantEngine:
                             state,
                             messages=working_messages,
                             model=selected_model,
-                            system_prompt=ctx["system_prompt"],
+                            system_prompt=system_prompt,
                             max_tokens=settings.max_output_tokens,
                             temperature=settings.temperature,
                             tools=None,
                         ):
                             if isinstance(token, ReasoningDelta):
-                                yield _event({"type": "reasoning", "content": token.text})
+                                for event in router.native(token.text):
+                                    yield _event(event)
                                 continue
-                            controls, chunks = avatar_parser.feed(token)
-                            for control in controls:
-                                yield _event(control)
-                            for chunk in chunks:
-                                full_response_parts.append(chunk)
-                                yield _event({"type": "token", "content": chunk})
+                            events, chunks = router.feed(token)
+                            full_response_parts.extend(chunks)
+                            for event in events:
+                                yield _event(event)
                     else:
                         raise
 
-                controls, chunks = avatar_parser.finish()
-                for control in controls:
-                    yield _event(control)
-                for chunk in chunks:
-                    full_response_parts.append(chunk)
-                    yield _event({"type": "token", "content": chunk})
+                events, chunks = router.finish_block()
+                full_response_parts.extend(chunks)
+                for event in events:
+                    yield _event(event)
 
                 tool_calls = state["calls"]
                 if not tool_calls:
@@ -577,14 +594,15 @@ class AssistantEngine:
 
             full_content = "".join(full_response_parts)
             if not full_content.strip():
-                full_content = NO_TEXT_FALLBACK
+                full_content = THOUGHT_ONLY_NOTE if router.thought else NO_TEXT_FALLBACK
 
             # Fala a resposta automaticamente se o TTS estiver habilitado.
             if settings.tts_enabled and settings.tts_speak_responses and tts_engine.available:
                 tts_engine.speak_async(full_content)
 
             saved = self._save_assistant_message(
-                conversation_id, full_content, sources, tool_trace
+                conversation_id, full_content, sources, tool_trace,
+                reasoning=router.thought, reasoning_seconds=router.seconds,
             )
             saved_id = saved["id"] if saved else None
             finished = True
@@ -596,6 +614,8 @@ class AssistantEngine:
                 "content": full_content,
                 "tool_calls": tool_calls_count,
             }
+            if router.thought:
+                done_payload["reasoning_seconds"] = router.seconds
             if pending_action_id:
                 done_payload["pending_action_id"] = pending_action_id
             yield _event(done_payload)
@@ -603,12 +623,14 @@ class AssistantEngine:
         except (GeneratorExit, asyncio.CancelledError):
             # Client disconnected / generation aborted. Persist partial content.
             partial = "".join(full_response_parts).strip()
-            if not finished and partial:
+            if not finished and (partial or router.thought):
                 self._save_assistant_message(
                     conversation_id,
                     partial + CANCELLED_MARKER,
                     sources,
                     tool_trace,
+                    reasoning=router.thought,
+                    reasoning_seconds=router.seconds,
                 )
             logger.info(f"Generation cancelled for conversation {conversation_id}")
             raise

@@ -495,6 +495,12 @@ class FakeBridge:
     def quit(self):
         self.calls.append(("quit",))
 
+    def toggle_mini_chat(self, x, y):
+        self.calls.append(("toggle_mini_chat", x, y))
+
+    def open_conversation(self, conversation_id):
+        self.calls.append(("open_conversation", conversation_id))
+
 
 def make_mascot(prefs=None, foreground=None, windows=()):
     clock = Clock()
@@ -622,6 +628,57 @@ def test_drag_by_the_hand_and_drop_then_click_and_double_click():
     assert ("open_chat",) in m.bridge.calls
 
 
+def _click_her(m, clock, cursor):
+    tick(m, clock)
+    px, py = _sprite_point(m)
+    wx, wy = m.window.updates[-1][1:]
+    cursor["pos"] = (wx + px, wy + py)
+    m._on_event("down", px, py)
+    m._on_event("up", px, py)
+    return px, py
+
+
+def _mini_calls(m):
+    return [c for c in m.bridge.calls if c[0] == "toggle_mini_chat"]
+
+
+def test_single_click_opens_mini_chat_after_wait():
+    m, clock, cursor, _s = make_mascot()
+    tick(m, clock)
+    _click_her(m, clock, cursor)
+    assert m.brain.expression in ("embarrassed", "annoyed")   # the poke still happens
+    tick(m, clock)
+    assert _mini_calls(m) == []                                # a second click may still come
+    tick(m, clock, int(m.click_wait / 0.04) + 2)
+    calls = _mini_calls(m)
+    assert len(calls) == 1
+    _, x, y = calls[0]
+    # Logical coordinates (scale 1.0 here) beside her, inside the work area.
+    assert 0 <= x <= 1920 - 380 and 0 <= y <= 1032 - 540
+    assert abs((x + 190) - m.brain.x) < 700
+    tick(m, clock, 40)
+    assert len(_mini_calls(m)) == 1                            # one click, one toggle
+
+
+def test_double_click_opens_main_chat_not_mini():
+    m, clock, cursor, _s = make_mascot()
+    tick(m, clock)
+    px, py = _click_her(m, clock, cursor)
+    m._on_event("dblclick", px, py)
+    m._on_event("up", px, py)
+    tick(m, clock, 40)
+    assert ("open_chat",) in m.bridge.calls
+    assert _mini_calls(m) == []
+
+
+def test_mini_chat_hands_its_conversation_to_the_main_window():
+    m, clock, _c, _s = make_mascot()
+    tick(m, clock)
+    m.post("open_conversation", "abc-123")
+    tick(m, clock)
+    assert ("open_conversation", "abc-123") in m.bridge.calls
+
+
 def test_a_quick_drag_throws_her():
     m, clock, cursor, _s = make_mascot()
     tick(m, clock)
@@ -743,6 +800,80 @@ def test_api_routes_lines_and_signals_to_the_mascot(client, fake_mascot):
     status = client.get("/api/mascot/status").json()
     assert status["running"] and status["active"] and status["visible"]
     assert client.post("/api/mascot/command", json={"action": "rm -rf"}).status_code == 422
+
+
+def test_open_conversation_route_reaches_the_mascot(client, fake_mascot):
+    r = client.post("/api/mascot/open-conversation", json={"conversation_id": "abc-123"})
+    assert r.json() == {"opened": True}
+    assert ("open_conversation", "abc-123") in fake_mascot.posted
+    bad = client.post("/api/mascot/open-conversation", json={"conversation_id": "../x"})
+    assert bad.status_code == 422
+    assert client.post("/api/mascot/command", json={"action": "close-mini"}).json() == {"delivered": True}
+    assert ("command", "close-mini") in fake_mascot.posted
+
+
+def test_bridge_creates_one_mini_window_and_toggles_it(monkeypatch):
+    import sys
+    import types
+    from app.mascot import launcher
+
+    created = []
+
+    class FakeEvents:
+        def __init__(self):
+            self.closing = Hook()
+
+    class Hook:
+        def __init__(self):
+            self.handlers = []
+
+        def __iadd__(self, fn):
+            self.handlers.append(fn)
+            return self
+
+    class FakeWebWindow:
+        def __init__(self, **kw):
+            self.kw = kw
+            self.events = FakeEvents()
+            self.log = []
+
+        def show(self):
+            self.log.append("show")
+
+        def hide(self):
+            self.log.append("hide")
+
+        def move(self, x, y):
+            self.log.append(("move", x, y))
+
+        def evaluate_js(self, script):
+            self.log.append(("js", script))
+
+    def create_window(title, url=None, **kw):
+        w = FakeWebWindow(title=title, url=url, **kw)
+        created.append(w)
+        return w
+
+    monkeypatch.setitem(sys.modules, "webview", types.SimpleNamespace(create_window=create_window, windows=[]))
+    monkeypatch.setattr(launcher.ChatWindowBridge, "_later", lambda self, fn: fn())
+    main = FakeWebWindow()
+    bridge = launcher.ChatWindowBridge(main)
+    monkeypatch.setattr(bridge, "open_chat", lambda: main.log.append("open_chat"))
+
+    bridge.toggle_mini_chat(100, 200)
+    assert len(created) == 1
+    mini = created[0]
+    assert mini.kw["url"].endswith("/ui/mini.html") and mini.kw["on_top"] is True
+    assert (mini.kw["x"], mini.kw["y"]) == (100, 200)
+    bridge.toggle_mini_chat(100, 200)
+    assert mini.log[-1] == "hide" and len(created) == 1
+    bridge.toggle_mini_chat(300, 400)
+    assert mini.log[-2:] == [("move", 300, 400), "show"]
+    # Closing the small window only hides it, unless the app is quitting.
+    assert mini.events.closing.handlers[0]() is False
+    bridge.open_conversation("abc-123")
+    assert "open_chat" in main.log
+    assert any(isinstance(e, tuple) and e[0] == "js" and '"abc-123"' in e[1] for e in main.log)
 
 
 def test_life_tick_counts_the_mascot_as_visible(client, fake_mascot, monkeypatch):

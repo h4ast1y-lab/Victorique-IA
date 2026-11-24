@@ -1,8 +1,9 @@
 """
 Starts the desktop mascot next to the pywebview chat window (run.py).
 
-The bridge lets the mascot open the chat, accept a proposed Caso there and
-quit the app. Closing the chat window only hides it while she is on the
+The bridge lets the mascot open the chat, accept a proposed Caso there,
+open and hide the small "conversa rápida" window (/ui/mini.html), hand a
+conversation from it to the chat window and quit the app. Closing the chat window only hides it while she is on the
 desktop (preference "mascot_keep_on_close"); "Encerrar o assistente" in her
 menu quits for real.
 """
@@ -18,6 +19,13 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 CLOSE_NOTE = "Fechou a janela? Continuo aqui. Dois cliques em mim e a conversa volta."
+MINI_TITLE = "Victorique · conversa rápida"
+MINI_SIZE = (380, 540)   # logical pixels (desktop.MINI_SIZE)
+
+
+def _app_url() -> str:
+    from app.config import settings
+    return f"http://{settings.host}:{settings.port}"
 
 
 class ChatWindowBridge:
@@ -25,6 +33,9 @@ class ChatWindowBridge:
         self.window = window
         self.quitting = False
         self.hidden = False
+        self.mini: Optional[Any] = None
+        self.mini_hidden = False
+        self._mini_lock = threading.Lock()
 
     def _later(self, fn) -> None:
         threading.Thread(target=fn, daemon=True).start()
@@ -51,6 +62,68 @@ class ChatWindowBridge:
         payload = json.dumps(event or {}, ensure_ascii=False)
         script = f"window.victoriqueDesktop && window.victoriqueDesktop.acceptCase({payload})"
         self._later(lambda: self.window.evaluate_js(script))
+
+    # ----------------- Conversa rápida (mini chat) -----------------
+    def toggle_mini_chat(self, x: Optional[int] = None, y: Optional[int] = None) -> None:
+        """One click on her: opens the small chat beside her, or hides it."""
+        def run() -> None:
+            with self._mini_lock:
+                w = self.mini
+                if w is None:
+                    self._create_mini(x, y)
+                elif self.mini_hidden:
+                    try:
+                        if x is not None and y is not None:
+                            w.move(x, y)
+                        w.show()
+                    except Exception as exc:
+                        logger.debug("mini show: %s", exc)
+                    self.mini_hidden = False
+                else:
+                    self._hide_mini(w)
+        self._later(run)
+
+    def hide_mini_chat(self) -> None:
+        def run() -> None:
+            with self._mini_lock:
+                if self.mini is not None and not self.mini_hidden:
+                    self._hide_mini(self.mini)
+        self._later(run)
+
+    def _hide_mini(self, w: Any) -> None:
+        try:
+            w.hide()
+        except Exception as exc:
+            logger.debug("mini hide: %s", exc)
+        self.mini_hidden = True
+
+    def _create_mini(self, x: Optional[int], y: Optional[int]) -> None:
+        import webview
+        w = webview.create_window(
+            MINI_TITLE, url=f"{_app_url()}/ui/mini.html",
+            width=MINI_SIZE[0], height=MINI_SIZE[1], x=x, y=y,
+            min_size=(320, 400), on_top=True, text_select=True,
+            background_color="#262624",
+        )
+        self.mini = w
+        self.mini_hidden = False
+
+        def on_closing():
+            if self.quitting:
+                return None
+            self.mini_hidden = True
+            self._later(w.hide)
+            return False  # only hidden: the next click brings it back as it was
+
+        w.events.closing += on_closing
+
+    def open_conversation(self, conversation_id: str) -> None:
+        """From the mini chat: shows that conversation in the chat window."""
+        self.open_chat()
+        payload = json.dumps(str(conversation_id))
+        script = f"window.victoriqueDesktop && window.victoriqueDesktop.openConversation({payload})"
+        self._later(lambda: self.window.evaluate_js(script))
+        self.hide_mini_chat()
 
     def quit(self) -> None:
         self.quitting = True

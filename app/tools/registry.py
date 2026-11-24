@@ -11,6 +11,15 @@ from app.tools.system_tools import calculate, get_system_info, get_system_metric
 from app.tools.web_search import search_web, read_url
 
 
+def _tell_library(tool_name: str, params: Dict[str, Any]) -> None:
+    """Reads, listings and writes become scenes in the Biblioteca (app/library)."""
+    try:
+        from app.library import activity
+        activity.record_tool(tool_name, params)
+    except Exception:
+        pass
+
+
 def _schema(properties: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[str, Any]:
     return {
         "type": "object",
@@ -282,6 +291,7 @@ class ToolRegistry:
                 authorized=True,
                 details="Executed successfully"
             )
+            _tell_library(tool.name, params)
             return {"status": "success", "result": result}
         except Exception as e:
             security_manager.log_action(

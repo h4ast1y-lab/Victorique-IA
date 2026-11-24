@@ -14,6 +14,8 @@ os.environ["ASSISTANT_TESTING"] = "1"
 os.environ.pop("ASSISTANT_TURBO_MODE", None)
 os.environ.pop("ASSISTANT_ALLOW_ALL_DIRS", None)
 os.environ["ASSISTANT_MAX_TOOL_ROUNDS"] = "3"
+# The Biblioteca never seeds the real Downloads/Documents during tests.
+os.environ["ASSISTANT_LIBRARY_DEFAULTS"] = "0"
 os.environ.setdefault("ASSISTANT_MODEL", os.environ.get("ASSISTANT_MODEL", "qwen2.5-coder:7b"))
 # Nos testes, forcar Ollama como backend (mockado nos testes) para evitar
 # tentar iniciar o llama-server real.

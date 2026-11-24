@@ -31,6 +31,11 @@ SCHEMA: Dict[str, tuple] = {
     "max_history_messages": ("int", settings.max_history_messages, (2, 100)),
     "enable_rag": ("bool", True, None),
     "claude_code_model": ("model", settings.claude_code_model, 80),
+    "codex_model": ("model", settings.codex_model, 80),
+    # Pensamento Profundo: she thinks out loud, in her voice, before answering.
+    "deep_thinking": ("bool", False, None),
+    # Modo Turbo: writes and internet run without approval; deletes still ask.
+    "turbo_mode": ("bool", settings.turbo_mode, None),
     # --- Voice ---
     "tts_speak_responses": ("bool", settings.tts_speak_responses, None),
     # --- Interface (only read by the UI) ---
@@ -54,6 +59,8 @@ SCHEMA: Dict[str, tuple] = {
     "mascot_replies": ("bool", True, None),
     "mascot_hide_fullscreen": ("bool", True, None),
     "mascot_keep_on_close": ("bool", True, None),
+    # Conversation used by the small chat opened by clicking her on the desktop.
+    "mini_conversation_id": ("str", "", 64),
     # --- Vida própria (spontaneous lines; app/life) ---
     "life_boredom": ("bool", True, None),
     "life_comments": ("bool", True, None),
@@ -73,7 +80,7 @@ SCHEMA: Dict[str, tuple] = {
 
 # Preferences mirrored onto the live settings object.
 _LIVE = ("temperature", "max_output_tokens", "max_history_messages",
-         "tts_speak_responses", "claude_code_model")
+         "tts_speak_responses", "claude_code_model", "codex_model", "turbo_mode")
 
 _MODEL_RE = re.compile(r"[A-Za-z0-9._:\-\[\]]*")
 

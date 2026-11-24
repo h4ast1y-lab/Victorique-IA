@@ -9,8 +9,9 @@ own thread, driven by its timer; other threads talk to it through `post`
 object supplied by run.py (open_chat, accept_case, quit).
 
 Interactions: drag her around by the hand (she lands on whatever is below:
-a window's top edge or the taskbar), click for a reaction, double-click to
-open the chat, right-click for a menu. Her balloon carries the "vida própria"
+a window's top edge or the taskbar), click for a reaction and the small
+"conversa rápida" window (after the double-click time, so a double click
+does not open both), double-click to open the chat, right-click for a menu. Her balloon carries the "vida própria"
 lines and, when the chat window is not in front, a short excerpt of a
 finished reply. The open windows are listed a few times a second (front to
 back) and the one she stands on is re-read every tick, so she rides along
@@ -53,8 +54,20 @@ LIFE_EXPRESSIONS = {
     "organizado": "happy", "retorno": "neutral",
 }
 SILENCE_MINUTES = 120
+CLICK_WAIT = 0.3           # fallback when Windows does not say its double-click time
+MINI_SIZE = (380, 540)     # logical size of the small chat window (launcher.MINI_SIZE)
 
 MENU_OPEN, MENU_STAY, MENU_SILENCE, MENU_DND, MENU_HIDE, MENU_QUIT = 1, 2, 3, 4, 5, 6
+MENU_MINI = 7
+
+
+def double_click_seconds() -> float:
+    try:
+        import ctypes
+        ms = ctypes.windll.user32.GetDoubleClickTime()
+        return max(0.2, min(0.9, ms / 1000.0))
+    except Exception:
+        return CLICK_WAIT
 
 DEFAULT_PREFS = {
     "mascot_enabled": True, "mascot_size": 136, "mascot_walk": True, "mascot_climb": True,
@@ -83,7 +96,8 @@ class DesktopMascot:
                  windows_fn: Optional[Callable[..., List[WindowBox]]] = None,
                  window_box_fn: Optional[Callable[[int], Optional[WindowBox]]] = None,
                  clock: Callable[[], float] = time.monotonic,
-                 rng: Optional[random.Random] = None):
+                 rng: Optional[random.Random] = None,
+                 click_wait: Optional[float] = None):
         if None in (window_factory, area_fn, cursor_fn, windows_fn, window_box_fn):
             from app.mascot import win32
             window_factory = window_factory or win32.LayeredWindow
@@ -109,6 +123,8 @@ class DesktopMascot:
         self.windows_fn = windows_fn
         self.window_box_fn = window_box_fn
         self.clock = clock
+        self.click_wait = click_wait if click_wait is not None else double_click_seconds()
+        self._pending_click: Optional[float] = None
         self.window = window_factory(self._on_event, interval_ms=TICK_MS)
         self.brain = Brain(rng)
         self.inbox: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
@@ -159,6 +175,9 @@ class DesktopMascot:
         dt = now - self._last_tick if self._last_tick else TICK_MS / 1000.0
         self._last_tick = now
         self._drain(now)
+        if self._pending_click is not None and now >= self._pending_click:
+            self._pending_click = None
+            self._toggle_mini()
         if now >= self._next_prefs:
             self._load_prefs()
             self._next_prefs = now + PREFS_EVERY
@@ -217,6 +236,8 @@ class DesktopMascot:
         target = self._hit(x, y)
         if press["kind"] == "sprite":
             self.brain.poke(now)
+            # The mini chat waits: a second click makes it a double click.
+            self._pending_click = now + self.click_wait
         elif press["kind"] == "button" and target == ("button", press["id"]):
             self._button(press["id"])
         elif press["kind"] == "balloon" and self.shown and self.shown.kind == "reply":
@@ -242,6 +263,7 @@ class DesktopMascot:
     def _ev_dblclick(self, x: int, y: int) -> None:
         target = self._hit(x, y)
         if target and target[0] == "sprite":
+            self._pending_click = None
             self._open_chat()
 
     def _ev_rclick(self, x: int, y: int) -> None:
@@ -282,11 +304,15 @@ class DesktopMascot:
                 self._reply(str(payload or ""), now)
         elif kind == "note":
             self._note(str(payload), now)
+        elif kind == "open_conversation":
+            self._bridge("open_conversation", str(payload))
         elif kind == "command":
             if payload == "home":
                 self.brain.placed = False
             elif payload == "hide":
                 self._set_pref("mascot_enabled", False)
+            elif payload == "close-mini":
+                self._bridge("hide_mini_chat")
 
     def _say(self, event: Dict[str, Any], now: float) -> None:
         text = str(event.get("text") or "").strip()
@@ -343,6 +369,25 @@ class DesktopMascot:
     def _open_chat(self) -> None:
         self._bridge("open_chat")
 
+    def _toggle_mini(self) -> None:
+        x, y = self._mini_spot()
+        self._bridge("toggle_mini_chat", x, y)
+
+    def _mini_spot(self) -> Tuple[int, int]:
+        """Logical top-left for the small chat: beside her, inside the work area."""
+        bx, by = self.brain.x, self.brain.y
+        area, dpi = self.area_fn(int(bx), int(by) - 2)
+        dpi = dpi or 1.0
+        w, h = MINI_SIZE[0] * dpi, MINI_SIZE[1] * dpi
+        gap = 16 * dpi
+        side = 70 * dpi                       # clear of her body
+        x = bx - side - w                     # to her left, if it fits
+        if x < area[0] + gap:
+            x = bx + side                     # else to her right
+        x = min(max(x, area[0] + gap), area[2] - w - gap)
+        y = min(max(by - h, area[1] + gap), area[3] - h - gap)
+        return round(x / dpi), round(y / dpi)
+
     def _bridge(self, name: str, *args) -> None:
         fn = getattr(self.bridge, name, None)
         if fn:
@@ -378,6 +423,7 @@ class DesktopMascot:
         dnd = bool(self.prefs.get("life_dnd", False))
         items = menu_items([
             (MENU_OPEN, "Abrir a conversa", False, True),
+            (MENU_MINI, "Conversa rápida", False, True),
             (MENU_STAY, "Ficar parada aqui", not walk, True),
             (MENU_SILENCE, "Voltar a falar" if silenced else "Silêncio por 2 horas", False, True),
             (MENU_DND, "Não perturbar", dnd, True),
@@ -388,6 +434,8 @@ class DesktopMascot:
         chosen = self.window.popup_menu(items, x, y)
         if chosen == MENU_OPEN:
             self._open_chat()
+        elif chosen == MENU_MINI:
+            self._toggle_mini()
         elif chosen == MENU_STAY:
             self._set_pref("mascot_walk", not walk)
         elif chosen == MENU_SILENCE:

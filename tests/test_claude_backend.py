@@ -314,3 +314,27 @@ async def test_final_text_after_tool_can_select_avatar_without_leaking_marker():
 def test_append_prompt_carries_avatar_instructions():
     from app.core.avatar_protocol import AVATAR_INSTRUCTIONS
     assert AVATAR_INSTRUCTIONS in backend_mod.build_append_prompt(None, None)
+
+
+@pytest.mark.asyncio
+async def test_deep_thinking_turns_her_thought_block_into_voice_reasoning():
+    h = Harness([
+        delta("thinking_delta", "native english"),
+        delta("text_delta", "<pensamento>Hm, um caso"),
+        delta("text_delta", " simples.</pensamento>\n"),
+        delta("text_delta", "Resolvido."),
+        AssistantMessage(content=[TextBlock(text="ignored")], model="m"),
+        result(),
+    ])
+    conv = _conv()
+    events = await collect(
+        ClaudeCodeBackend(h.factory).run_turn(conv, "oi", None, None, deep_thinking=True)
+    )
+    reasoning = [e for e in events if e["type"] == "reasoning"]
+    assert "".join(e["content"] for e in reasoning) == "Hm, um caso simples."
+    assert all(e.get("voice") for e in reasoning)
+    assert "".join(e["content"] for e in events if e["type"] == "token") == "Resolvido."
+    assert "<pensamento>" in h.options[0].system_prompt["append"]
+    saved = _assistant_messages(conv)[-1]
+    assert saved["content"] == "Resolvido."
+    assert saved["reasoning"] == "Hm, um caso simples."

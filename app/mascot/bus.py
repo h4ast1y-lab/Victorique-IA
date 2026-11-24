@@ -71,6 +71,14 @@ class MascotBus:
         mascot.post("command", action)
         return True
 
+    def open_conversation(self, conversation_id: str) -> bool:
+        """The mini chat asks to continue a conversation in the main window."""
+        mascot = self.mascot
+        if not mascot:
+            return False
+        mascot.post("open_conversation", conversation_id)
+        return True
+
     def status(self) -> Dict[str, Any]:
         mascot = self.mascot
         if not mascot:
