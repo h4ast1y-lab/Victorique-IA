@@ -89,11 +89,11 @@ async def buscar_documentos(args: Dict[str, Any], project_id: Optional[str]) -> 
         return _content("Informe o que procurar nos documentos.")
     try:
         chunks = await vector_store.search(query=query, project_id=project_id, top_k=DOCUMENT_TOP_K)
-    except Exception as exc:  # Ollama embeddings offline, DB error, etc.
+    except Exception as exc:  # DB error etc. (no Ollama -> keyword search, no error)
         logger.warning("buscar_documentos falhou: %s", exc)
         return _content(
-            "Busca nos documentos indisponível agora (o Ollama, que gera os embeddings, "
-            "não respondeu). Diga isso ao usuário em vez de inventar o conteúdo."
+            "Busca nos documentos indisponível agora (erro ao ler o índice). "
+            "Diga isso ao usuário em vez de inventar o conteúdo."
         )
     if not chunks:
         return _content("Nenhum trecho relevante encontrado nos documentos indexados.")

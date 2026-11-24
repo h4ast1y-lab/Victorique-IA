@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -46,6 +47,70 @@ def _lexical_score(query: str, text: str) -> float:
     return min(1.0, 0.5 * term_ratio + exact_bonus)
 
 
+# --- Keyword mode (no embeddings) -------------------------------------------
+# Used when Ollama is not installed or not running: on a machine where the AI
+# runs only through Claude Code there is nothing to compute embeddings, so
+# documents are indexed and searched by their words alone.
+
+_STOPWORDS = frozenset(
+    """
+    que para com uma uns umas dos das nos nas pelo pela pelos pelas por sem sob
+    sobre entre como mais menos muito muita muitos muitas isso isto esse essa
+    esses essas este esta estes estas aquele aquela aquilo qual quais quem onde
+    quando porque pois mas tambem ainda ser sao foi era sera tem ter tinha
+    voce voces ele ela eles elas meu minha seu sua nosso nossa lhe aos ate
+    the and for with that this from are was were you your what which who
+    """.split()
+)
+_MIN_KEYWORD_COVERAGE = 0.5
+
+
+def _normalize(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text.lower())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _keyword_terms(query: str) -> List[str]:
+    terms: List[str] = []
+    for word in re.findall(r"\w+", _normalize(query)):
+        if len(word) < 3 or word in _STOPWORDS:
+            continue
+        # Light stemming so "gato"/"gatos" or "relatorio"/"relatorios" match.
+        stem = word[: max(4, len(word) - 2)]
+        if stem not in terms:
+            terms.append(stem)
+    return terms
+
+
+def _keyword_score(query: str, text: str) -> float:
+    """Accent-insensitive keyword score in [0, 1]; 0 means "not relevant".
+
+    At least half of the meaningful query words must appear in the text.
+    Among matches, more occurrences and the exact phrase rank higher.
+    """
+    terms = _keyword_terms(query)
+    if not terms or not text:
+        return 0.0
+    words = re.findall(r"\w+", _normalize(text))
+    counts = [sum(1 for w in words if w.startswith(term)) for term in terms]
+    coverage = sum(1 for c in counts if c) / len(terms)
+    if coverage < _MIN_KEYWORD_COVERAGE:
+        return 0.0
+    frequency = min(1.0, sum(counts) / (3 * len(terms)))
+    phrase = 0.1 if _normalize(query).strip() in _normalize(text) else 0.0
+    return round(min(1.0, 0.7 * coverage + 0.2 * frequency + phrase), 4)
+
+
+async def _try_embedding(text: str) -> Optional[List[float]]:
+    """Embedding from Ollama, or None when it is missing/offline/failing."""
+    try:
+        vector = await ollama_client.generate_embeddings(text)
+    except Exception as exc:
+        logger.info("Embeddings indisponíveis (%s); usando busca por palavras-chave.", exc)
+        return None
+    return vector or None
+
+
 class VectorStore:
     async def index_document(
         self,
@@ -65,7 +130,7 @@ class VectorStore:
         if not chunks:
             raise ValueError(
                 "Nenhum texto extraível encontrado no documento. "
-                "PDFs digitalizados (imagem) precisam de OCR, que não está incluído nesta versão."
+                "Se for um PDF digitalizado (imagem), verifique se o Tesseract-OCR está instalado."
             )
 
         doc_id = str(uuid.uuid4())
@@ -74,14 +139,16 @@ class VectorStore:
 
         logger.info(f"Indexing '{title}': {len(pages)} pages, {len(chunks)} chunks.")
 
+        # Without Ollama the chunks are stored with an empty vector ("[]") and
+        # found later by keyword search. Stop asking after the first failure.
         embedded_chunks = []
+        embeddings_ok = True
         for ch in chunks:
-            vector = await ollama_client.generate_embeddings(ch["text"])
-            if not vector:
-                raise RuntimeError(
-                    f"Falha ao gerar embedding para o fragmento {ch['chunk_index']} de '{title}'."
-                )
-            embedded_chunks.append((ch, vector))
+            vector = await _try_embedding(ch["text"]) if embeddings_ok else None
+            if vector is None:
+                embeddings_ok = False
+            embedded_chunks.append((ch, vector or []))
+        search_mode = "semantic" if any(v for _, v in embedded_chunks) else "keyword"
 
         with get_connection() as conn:
             conn.execute(
@@ -107,7 +174,8 @@ class VectorStore:
             "title": title,
             "total_pages": len(pages),
             "total_chunks": len(chunks),
-            "collection": collection
+            "collection": collection,
+            "search_mode": search_mode,
         }
 
     async def search(
@@ -120,10 +188,10 @@ class VectorStore:
     ) -> List[Dict[str, Any]]:
         """
         Semantic search across indexed document chunks using cosine similarity.
+        Falls back to keyword search for chunks without an embedding, or for
+        every chunk when Ollama cannot embed the query.
         """
-        query_vec = await ollama_client.generate_embeddings(query)
-        if not query_vec:
-            return []
+        query_vec = await _try_embedding(query)
 
         sql = """
             SELECT c.id, c.document_id, c.page_number, c.content, c.embedding_json,
@@ -149,7 +217,22 @@ class VectorStore:
             rows = conn.execute(sql, params).fetchall()
             for r in rows:
                 try:
-                    chunk_vec = json.loads(r["embedding_json"])
+                    chunk_vec = json.loads(r["embedding_json"] or "[]")
+                    if not query_vec or not chunk_vec or len(chunk_vec) != len(query_vec):
+                        score = _keyword_score(query, r["content"])
+                        if score > 0:
+                            scored_results.append({
+                                "chunk_id": r["id"],
+                                "document_id": r["document_id"],
+                                "document_title": r["doc_title"],
+                                "file_path": r["file_path"],
+                                "page": r["page_number"],
+                                "content": r["content"],
+                                "score": score,
+                                "similarity": None,
+                            })
+                        continue
+
                     sim = cosine_similarity(query_vec, chunk_vec)
                     
                     if getattr(settings, "rag_hybrid_search", True):
