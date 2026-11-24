@@ -1,5 +1,6 @@
 """
-The desktop mascot: Victorique in miniature walking on top of the taskbar.
+The desktop mascot: Victorique in miniature living on the taskbar and on top
+of the open windows.
 
 Ties together the behaviour (behavior.Brain), the drawing (sprite, balloon)
 and the native window (win32.LayeredWindow). Everything runs on the window's
@@ -7,10 +8,13 @@ own thread, driven by its timer; other threads talk to it through `post`
 (see bus.MascotBus). The chat window is reached through a small `bridge`
 object supplied by run.py (open_chat, accept_case, quit).
 
-Interactions: drag her around (she falls back to the taskbar), click for a
-reaction, double-click to open the chat, right-click for a menu. Her balloon
-carries the "vida própria" lines and, when the chat window is not in front,
-a short excerpt of a finished reply.
+Interactions: drag her around by the hand (she lands on whatever is below:
+a window's top edge or the taskbar), click for a reaction, double-click to
+open the chat, right-click for a menu. Her balloon carries the "vida própria"
+lines and, when the chat window is not in front, a short excerpt of a
+finished reply. The open windows are listed a few times a second (front to
+back) and the one she stands on is re-read every tick, so she rides along
+when it is dragged and falls when it closes, is minimized or covered.
 """
 from __future__ import annotations
 
@@ -18,16 +22,18 @@ import logging
 import queue
 import random
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 from PIL import Image
 
 from app.mascot import sprite
 from app.mascot.balloon import WIDTH as BALLOON_WIDTH, Bubble, Button, plain_text, render_balloon
-from app.mascot.behavior import Brain, Floor, wobble
+from app.mascot.behavior import Brain, wobble
 from app.mascot.bus import mascot_bus
+from app.mascot.surfaces import Area, WindowBox, World, build_world
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +41,7 @@ TICK_MS = 40
 PREFS_EVERY = 2.0
 FULLSCREEN_EVERY = 1.0
 TOPMOST_EVERY = 5.0
+WINDOWS_EVERY = 0.4
 DRAG_THRESHOLD = 5
 REPLY_CHARS = 320
 LIFE_TAGS = {
@@ -50,8 +57,8 @@ SILENCE_MINUTES = 120
 MENU_OPEN, MENU_STAY, MENU_SILENCE, MENU_DND, MENU_HIDE, MENU_QUIT = 1, 2, 3, 4, 5, 6
 
 DEFAULT_PREFS = {
-    "mascot_enabled": True, "mascot_size": 136, "mascot_walk": True, "mascot_replies": True,
-    "mascot_hide_fullscreen": True, "life_dnd": False,
+    "mascot_enabled": True, "mascot_size": 136, "mascot_walk": True, "mascot_climb": True,
+    "mascot_replies": True, "mascot_hide_fullscreen": True, "life_dnd": False,
 }
 
 
@@ -73,13 +80,17 @@ class DesktopMascot:
                  area_fn: Optional[Callable[[int, int], Tuple[Tuple[int, int, int, int], float]]] = None,
                  cursor_fn: Optional[Callable[[], Tuple[int, int]]] = None,
                  foreground_fn: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+                 windows_fn: Optional[Callable[..., List[WindowBox]]] = None,
+                 window_box_fn: Optional[Callable[[int], Optional[WindowBox]]] = None,
                  clock: Callable[[], float] = time.monotonic,
                  rng: Optional[random.Random] = None):
-        if window_factory is None or area_fn is None or cursor_fn is None:
+        if None in (window_factory, area_fn, cursor_fn, windows_fn, window_box_fn):
             from app.mascot import win32
             window_factory = window_factory or win32.LayeredWindow
             area_fn = area_fn or win32.work_area_at
             cursor_fn = cursor_fn or win32.cursor_pos
+            windows_fn = windows_fn or win32.top_windows
+            window_box_fn = window_box_fn or win32.window_box
         if foreground_fn is None:
             from app.life.observer import foreground_window as foreground_fn
         if prefs_loader is None or prefs_saver is None:
@@ -95,6 +106,8 @@ class DesktopMascot:
         self.area_fn = area_fn
         self.cursor_fn = cursor_fn
         self.foreground_fn = foreground_fn
+        self.windows_fn = windows_fn
+        self.window_box_fn = window_box_fn
         self.clock = clock
         self.window = window_factory(self._on_event, interval_ms=TICK_MS)
         self.brain = Brain(rng)
@@ -112,6 +125,9 @@ class DesktopMascot:
         self._layout: Dict[str, Any] = {}
         self._press: Optional[Dict[str, Any]] = None
         self._dragging = False
+        self._drag_trail: Deque[Tuple[float, int, int]] = deque(maxlen=8)
+        self._windows: List[WindowBox] = []
+        self._next_windows = 0.0
         self._balloon_cache: Dict[tuple, Tuple[Image.Image, Dict[str, tuple]]] = {}
         self._load_prefs()
 
@@ -165,9 +181,7 @@ class DesktopMascot:
         if target is None:
             return
         kind, ident = target
-        cx, cy = self.cursor_fn()
-        self._press = {"kind": kind, "id": ident, "start": (cx, cy),
-                       "offset": (self.brain.x - cx, self.brain.y - cy)}
+        self._press = {"kind": kind, "id": ident, "start": self.cursor_fn()}
         self._dragging = False
 
     def _ev_move(self, x: int, y: int) -> None:
@@ -177,10 +191,13 @@ class DesktopMascot:
             sx, sy = press["start"]
             if not self._dragging and max(abs(cx - sx), abs(cy - sy)) >= DRAG_THRESHOLD:
                 self._dragging = True
+                self._drag_trail.clear()
                 self.brain.grab(self.clock())
+                self.window.hide_cursor(True)
             if self._dragging:
-                ox, oy = press["offset"]
-                self.brain.drag_to(cx + ox, cy + oy)
+                # The frames hold a drawn cursor whose tip is her anchor.
+                self.brain.drag_to(cx, cy)
+                self._drag_trail.append((self.clock(), cx, cy))
             return
         target = self._hit(x, y)
         hover = target[1] if target and target[0] == "button" else None
@@ -193,8 +210,7 @@ class DesktopMascot:
         press, self._press = self._press, None
         now = self.clock()
         if self._dragging:
-            self._dragging = False
-            self.brain.release(now)
+            self._let_go(now)
             return
         if not press:
             return
@@ -208,9 +224,20 @@ class DesktopMascot:
 
     def _ev_lost_capture(self) -> None:
         if self._dragging:
-            self._dragging = False
             self._press = None
-            self.brain.release(self.clock())
+            self._let_go(self.clock())
+
+    def _let_go(self, now: float) -> None:
+        """Ends a drag; a quick flick throws her."""
+        self._dragging = False
+        vx = vy = 0.0
+        trail = [p for p in self._drag_trail if now - p[0] <= 0.12]
+        if len(trail) >= 2 and trail[-1][0] - trail[0][0] > 0.01:
+            span = trail[-1][0] - trail[0][0]
+            vx = (trail[-1][1] - trail[0][1]) / span
+            vy = (trail[-1][2] - trail[0][2]) / span
+        self.brain.release(now, vx, vy)
+        self.window.hide_cursor(False)
 
     def _ev_dblclick(self, x: int, y: int) -> None:
         target = self._hit(x, y)
@@ -394,39 +421,61 @@ class DesktopMascot:
             return False
         return bool(fg and fg.get("fullscreen") and not fg.get("own"))
 
-    def _metrics(self) -> Tuple[Floor, float, int]:
+    def _world(self, now: float) -> Tuple[World, float, int]:
         probe_x = self.brain.x if self.brain.placed else 0
         probe_y = self.brain.y - 2 if self.brain.placed else 0
-        (left, top, right, bottom), dpi = self.area_fn(int(probe_x), int(probe_y))
+        area, dpi = self.area_fn(int(probe_x), int(probe_y))
         size = max(60, min(320, int(self.prefs.get("mascot_size") or 136)))
         size_px = max(40, round(size * dpi))
-        self.brain.scale = size_px / 136.0
-        return Floor(left, right, bottom), dpi, size_px
+        windows: List[WindowBox] = []
+        if self.prefs.get("mascot_climb", True):
+            self._refresh_windows(now)
+            windows = self._windows
+        return build_world(tuple(area), size_px, windows), dpi, size_px
+
+    def _refresh_windows(self, now: float) -> None:
+        if now >= self._next_windows:
+            self._next_windows = now + WINDOWS_EVERY
+            try:
+                self._windows = list(self.windows_fn(exclude=[getattr(self.window, "hwnd", None)]))
+            except Exception:
+                logger.exception("Mascote: lista de janelas")
+                self._windows = []
+            return
+        key = self.brain.on_window()
+        if not key:
+            return
+        # The window under her feet is re-read every tick, so she rides along smoothly.
+        hwnd = int(key[1:])
+        try:
+            box = self.window_box_fn(hwnd)
+        except Exception:
+            box = None
+        self._windows = [box if w.hwnd == hwnd else w for w in self._windows if w.hwnd != hwnd or box]
 
     def _frame(self, now: float, dt: float) -> None:
-        floor, dpi, size_px = self._metrics()
-        sprite_w, sprite_h = sprite.size_for(size_px)
+        world, dpi, size_px = self._world(now)
         if not self.brain.placed:
-            self.brain.place(floor, now, x=floor.right - 190 * self.brain.scale)
+            self.brain.place(world, now)
         if self.shown and now >= self.shown.until and not (self.hover or self._press):
             self.shown = None
             self._last_frame = None
-        self.brain.step(dt, now, floor, sprite_w * 0.42,
-                        walk=bool(self.prefs.get("mascot_walk", True)), busy=self.shown is not None)
-        look, facing = self.brain.look(now)
-        img = sprite.render_facing(look, size_px, facing)
+        self.brain.step(dt, now, world, walk=bool(self.prefs.get("mascot_walk", True)),
+                        climb=bool(self.prefs.get("mascot_climb", True)), busy=self.shown is not None)
+        look = self.brain.look(now)
+        img, (ax, ay) = sprite.render(look, size_px)
         shake = wobble(now) * self.brain.scale if self.brain.app_state == "erro" and self.brain.is_resting() else 0
-        sx = round(self.brain.x - sprite_w / 2 + shake)
-        sy = round(self.brain.y - sprite_h + sprite.feet_offset(size_px))
-        key = (look, facing, sx, sy, id(self.shown), self.hover, size_px)
+        sx = round(self.brain.x - ax + shake)
+        sy = round(self.brain.y - ay)
+        key = (look, sx, sy, id(self.shown), self.hover, size_px)
         if key == self._last_frame and self.window.visible:
             return
         self._last_frame = key
-        canvas, ox, oy = self._compose(img, sx, sy, floor, dpi, size_px)
+        canvas, ox, oy = self._compose(img, sx, sy, world.area, dpi, size_px)
         self.window.update(canvas, ox, oy)
         self.on_screen = True
 
-    def _compose(self, img: Image.Image, sx: int, sy: int, floor: Floor, dpi: float,
+    def _compose(self, img: Image.Image, sx: int, sy: int, area: Area, dpi: float,
                  size_px: int) -> Tuple[Image.Image, int, int]:
         if not self.shown:
             self._layout = {"sprite": (0, 0, img), "balloon": None}
@@ -434,7 +483,7 @@ class DesktopMascot:
         scale = max(0.75, dpi * max(0.9, min(1.3, size_px / dpi / 136.0)))
         bw = round(BALLOON_WIDTH * scale)
         centre = sx + img.width / 2
-        bx = int(min(max(centre - bw / 2, floor.left + 4), floor.right - bw - 4))
+        bx = int(min(max(centre - bw / 2, area[0] + 4), area[2] - bw - 4))
         tail_at = (centre - bx) / bw
         key = (id(self.shown), self.hover, round(scale, 2), round(tail_at, 2))
         cached = self._balloon_cache.get(key)
@@ -443,8 +492,7 @@ class DesktopMascot:
             cached = render_balloon(self.shown.bubble, scale, self.hover, tail_at)
             self._balloon_cache[key] = cached
         bimg, rects = cached
-        head_top = sy + round(img.height * 0.10)
-        by = head_top - bimg.height + round(4 * scale)
+        by = max(sy - bimg.height + round(6 * scale), int(area[1]))
         x0, y0 = min(sx, bx), min(sy, by)
         x1, y1 = max(sx + img.width, bx + bimg.width), max(sy + img.height, by + bimg.height)
         canvas = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))

@@ -32,11 +32,16 @@ if AVAILABLE:
         shcore = ctypes.WinDLL("shcore")
     except OSError:  # pragma: no cover - very old Windows
         shcore = None
+    try:
+        dwmapi = ctypes.WinDLL("dwmapi")
+    except OSError:  # pragma: no cover
+        dwmapi = None
 
 LRESULT = ctypes.c_ssize_t
 WPARAM = ctypes.c_size_t
 LPARAM = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, WPARAM, LPARAM) if AVAILABLE else None
+WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, LPARAM) if AVAILABLE else None
 
 WS_POPUP = 0x80000000
 WS_EX_LAYERED = 0x00080000
@@ -81,6 +86,15 @@ TPM_BOTTOMALIGN = 0x0020
 MONITOR_DEFAULTTONEAREST = 2
 MDT_EFFECTIVE_DPI = 0
 IDC_HAND = 32649
+IDC_ARROW = 32512
+GWL_EXSTYLE = -20
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_APPWINDOW = 0x00040000
+DWMWA_EXTENDED_FRAME_BOUNDS = 9
+DWMWA_CLOAKED = 14
+# Shell surfaces that are not windows she can stand on.
+SKIP_CLASSES = {"progman", "workerw", "shell_traywnd", "shell_secondarytraywnd",
+                "windows.ui.core.corewindow", "victoriquemascot"}
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
 
 
@@ -154,6 +168,18 @@ def _signatures() -> None:
     user32.LoadCursorW.argtypes = [wintypes.HINSTANCE, wintypes.LPVOID]
     user32.LoadCursorW.restype = wintypes.HANDLE
     user32.SetCursor.argtypes = [wintypes.HANDLE]
+    user32.EnumWindows.argtypes = [WNDENUMPROC, LPARAM]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.IsZoomed.argtypes = [wintypes.HWND]
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowLongW.restype = wintypes.LONG
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    if dwmapi is not None:
+        dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD]
+        dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
     user32.GetDC.restype = wintypes.HDC
     user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
     gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
@@ -197,6 +223,60 @@ def cursor_pos() -> Tuple[int, int]:
     return pt.x, pt.y
 
 
+def window_box(hwnd: int):
+    """The window's visible frame (without the invisible resize borders) as a
+    surfaces.WindowBox, or None when it is hidden, minimized or cloaked (on
+    another virtual desktop, or a suspended UWP app)."""
+    from app.mascot.surfaces import WindowBox
+    if not hwnd or not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+        return None
+    rect = wintypes.RECT()
+    if dwmapi is not None:
+        cloaked = wintypes.DWORD()
+        if dwmapi.DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, ctypes.byref(cloaked),
+                                        ctypes.sizeof(cloaked)) == 0 and cloaked.value:
+            return None
+        if dwmapi.DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(rect),
+                                        ctypes.sizeof(rect)) != 0:
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    else:
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    if rect.right - rect.left <= 0 or rect.bottom - rect.top <= 0:
+        return None
+    return WindowBox(int(hwnd), rect.left, rect.top, rect.right, rect.bottom, bool(user32.IsZoomed(hwnd)))
+
+
+def top_windows(exclude: Sequence[int] = ()) -> list:
+    """Visible application windows, front to back (the z-order), as
+    surfaces.WindowBox. Untitled, tool and click-through windows and the
+    desktop and taskbar are left out. Physical pixels on a DPI-aware thread."""
+    skip = {int(h) for h in exclude if h}
+    found: list = []
+    name = ctypes.create_unicode_buffer(64)
+
+    def visit(hwnd, _lparam):
+        try:
+            if not hwnd or int(hwnd) in skip or not user32.IsWindowVisible(hwnd):
+                return True
+            ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
+            if ex & WS_EX_TRANSPARENT or (ex & WS_EX_TOOLWINDOW and not ex & WS_EX_APPWINDOW):
+                return True
+            if user32.GetWindowTextLengthW(hwnd) == 0:
+                return True
+            user32.GetClassNameW(hwnd, name, 64)
+            if name.value.lower() in SKIP_CLASSES:
+                return True
+            box = window_box(hwnd)
+            if box is not None:
+                found.append(box)
+        except Exception:
+            pass
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(visit), 0)
+    return found
+
+
 def _lparam_xy(lparam: int) -> Tuple[int, int]:
     x = ctypes.c_short(lparam & 0xFFFF).value
     y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
@@ -227,6 +307,7 @@ class LayeredWindow:
         self._size = (0, 0)
         self._dib = None
         self.hand_cursor = False
+        self.cursor_hidden = False
         self.pos = (0, 0)
 
     # ----------------- Thread -----------------
@@ -300,8 +381,8 @@ class LayeredWindow:
             return 0
         if msg == WM_MOUSEACTIVATE:
             return MA_NOACTIVATE
-        if msg == WM_SETCURSOR and self.hand_cursor:
-            user32.SetCursor(user32.LoadCursorW(None, ctypes.c_void_p(IDC_HAND)))
+        if msg == WM_SETCURSOR and (self.hand_cursor or self.cursor_hidden):
+            user32.SetCursor(None if self.cursor_hidden else user32.LoadCursorW(None, ctypes.c_void_p(IDC_HAND)))
             return 1
         if msg == WM_LBUTTONDOWN:
             user32.SetCapture(hwnd)
@@ -393,6 +474,16 @@ class LayeredWindow:
     @property
     def visible(self) -> bool:
         return self._visible
+
+    def hide_cursor(self, hidden: bool) -> None:
+        """While she is dragged the frames draw the cursor in her hand, so the
+        real one hides (window thread only; it comes back on release)."""
+        self.cursor_hidden = hidden
+        if hidden:
+            user32.SetCursor(None)
+        else:
+            cursor = IDC_HAND if self.hand_cursor else IDC_ARROW
+            user32.SetCursor(user32.LoadCursorW(None, ctypes.c_void_p(cursor)))
 
     def keep_on_top(self) -> None:
         if self.hwnd:

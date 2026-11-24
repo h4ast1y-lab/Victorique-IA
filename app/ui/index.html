@@ -485,7 +485,7 @@
         <!-- Na área de trabalho -->
         <section class="settings-section" data-section="desk">
           <h2>Na área de trabalho</h2>
-          <p class="section-lead">A Victorique em miniatura anda sobre a barra de tarefas, lê, cochila e fala pelo balão. Arraste-a com o mouse, dê dois cliques para abrir a conversa e use o botão direito para o menu dela.</p>
+          <p class="section-lead">A Victorique em miniatura anda sobre a barra de tarefas e por cima das janelas abertas, lê, toma chá, cochila e fala pelo balão. Arraste-a pela mão, dê dois cliques para abrir a conversa e use o botão direito para o menu dela.</p>
           <div class="status-card" id="mascotStatus">Verificando…</div>
           <div class="toggle-row">
             <div><strong>Mostrar a Victorique na área de trabalho</strong><small>Só no aplicativo de desktop (no navegador ela fica de fora).</small></div>
@@ -496,8 +496,12 @@
             <input type="number" id="prefMascotSize" data-pref="mascot_size" min="90" max="240" step="2">
           </div>
           <div class="toggle-row">
-            <div><strong>Passear pela barra de tarefas</strong><small>Desligado, ela fica onde você a deixar (ainda lê e cochila).</small></div>
+            <div><strong>Passear</strong><small>Desligado, ela fica onde você a deixar (ainda lê, toma chá e cochila).</small></div>
             <input type="checkbox" class="switch" data-pref="mascot_walk">
+          </div>
+          <div class="toggle-row">
+            <div><strong>Subir nas janelas abertas</strong><small>Ela escala a lateral de uma janela, pula para outras, senta na barra de título e acompanha a janela quando você a arrasta. Janelas maximizadas ficam de fora.</small></div>
+            <input type="checkbox" class="switch" data-pref="mascot_climb">
           </div>
           <div class="field">
             <label for="prefIdle">Ela adormece depois de (minutos sem interação)</label>

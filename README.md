@@ -293,7 +293,7 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 | Memórias explícitas (global/projeto), editar/desativar/excluir | implementado; testado |
 | Casos (antes Projetos) independentes, com arquivamento, + exclusão em cascata | implementado; testado (inclui remoção do arquivo) |
 | Organizador: mover em lote, renomear, Reserva e Desfazer | implementado; testado automaticamente e no navegador |
-| Victorique em miniatura andando pela área de trabalho (anda, lê, cochila, fuma o cachimbo, fala pelo balão; arrastar, clique, dois cliques, menu) | implementado (seção 14); substitui o antigo retrato com clipes |
+| Victorique em miniatura, em pixel art, na área de trabalho (anda na barra de tarefas e por cima das janelas abertas, escala, pula, senta na beirada, lê, toma chá, cochila, fala pelo balão; arrastar pela mão, arremessar, clique, dois cliques, menu) | implementado (seção 14); substitui o antigo retrato com clipes |
 | Expressões e gestos escolhidos pelo modelo (`[expression:ID]`, `[gesture:ID]`, ocultos no texto) | implementado nos dois modos; protocolo adaptado do Victorique-IA-2 |
 | RAG PDF/TXT/MD com documento/página | implementado; testado com embeddings reais |
 | Isolamento por projeto (conversas, memórias, documentos, RAG) | implementado; testado automaticamente e no E2E |
@@ -388,11 +388,13 @@ app/
   voice/      __init__.py   (TTS pyttsx3/SAPI5 + STT SpeechRecognition/Sphinx)
   memory/     database.py, conversation_store.py, memory_store.py, project_store.py
   life/       observer.py, policy.py, folders.py, lines.py, generator.py, service.py
-  mascot/     sprite.py, behavior.py, balloon.py, win32.py, desktop.py, bus.py, launcher.py
+  mascot/     sprite.py, behavior.py, surfaces.py, balloon.py, win32.py, desktop.py, bus.py,
+              launcher.py, assets/ (victorique.webp + victorique.json; source/ com as 20 folhas)
   rag/        document_loader.py, text_splitter.py, vector_store.py
   security/   path_guard.py, permissions.py
   tools/      registry.py, file_tools.py, system_tools.py, web_search.py
   ui/         index.html, css/style.css, js/app.js, js/markdown.js, favicon.svg
+scripts/      build_mascot_sprites.py  (gera o atlas da mascote a partir das folhas)
 tests/
 data/         assistant.db, documents/, backups/  (não versionar)
 ```
@@ -555,18 +557,29 @@ da pasta levou 2 s.
 
 ## 14. Victorique na área de trabalho
 
-No aplicativo de desktop (`run.bat`), a Victorique em miniatura vive sobre a barra de
-tarefas: passeia, para, senta para ler e vira as páginas, fuma o cachimbo, toma chá,
-ajeita o cabelo e cochila quando você some. Ela substitui o antigo retrato com clipes
-da barra lateral; ali ficou só uma linha com o estado dela e a lua do não perturbar.
+No aplicativo de desktop (`run.bat`), a Victorique em miniatura, em pixel art, vive
+na área de trabalho: anda sobre a barra de tarefas e por cima das janelas abertas, vira
+para os lados, lê e fecha o livro, toma chá, olha em volta, pensa, espia pela borda da
+tela, senta no chão ou na beirada de uma janela com as pernas para fora e cochila
+quando você some. Ela substitui o antigo retrato com clipes da barra lateral; ali ficou
+só uma linha com o estado dela e a lua do não perturbar.
 
-- **Com o mouse:** arraste-a para qualquer lugar (ela esperneia e cai de volta na barra
-  de tarefas do monitor onde for solta); um clique dá uma reação; dois cliques abrem a
-  conversa; o botão direito abre o menu (abrir a conversa, ficar parada, Silêncio de
-  2 horas, não perturbar, esconder, encerrar o assistente).
-- **Estados:** pensando, ela para e acende o cachimbo; falando, mexe a boca; ouvindo,
-  inclina a cabeça; erro, fica preocupada; sem interação (minutos configuráveis),
-  senta e dorme com «z z z».
+- **Por cima das janelas:** ela anda na borda de cima das janelas abertas que não estão
+  maximizadas. Escala a lateral de uma janela que desce até perto da barra de tarefas,
+  pula para uma janela um pouco mais alta, desce pulando e senta na beirada. Se a janela
+  é arrastada, ela vai junto; se a janela fecha, é minimizada ou fica coberta por outra,
+  ela cai no que estiver embaixo. Só vale a parte visível da borda: uma janela na frente
+  divide o caminho. Ficam de fora as janelas maximizadas, sem título, de ferramenta e as
+  que deixam o clique passar. Desligue em Configurações → «Subir nas janelas abertas».
+- **Com o mouse:** arraste-a pela mão (o cursor do Windows some e ela aparece segurando
+  um cursor desenhado). Solta, ela cai no que estiver embaixo: a borda de uma janela ou
+  a barra de tarefas do monitor. Um movimento rápido ao soltar a arremessa. Um clique dá
+  uma reação; dois cliques abrem a conversa; o botão direito abre o menu (abrir a
+  conversa, ficar parada, Silêncio de 2 horas, não perturbar, esconder, encerrar o
+  assistente).
+- **Estados:** pensando, ela para com ar pensativo; falando, mexe a boca; ouvindo, fica
+  atenta; erro, fica contrariada e treme; sem interação (minutos configuráveis), senta
+  e dorme com «z z z».
 - **Expressões do modelo:** nos dois modos, a resposta final pode começar com
   marcadores ocultos `[expression:ID]` e `[gesture:ID]` (IDs fixos, ver
   `GET /api/avatar/manifest`). Eles saem do texto antes de salvar, mostrar ou ler em voz
@@ -580,13 +593,29 @@ da barra lateral; ali ficou só uma linha com o estado dela e a lua do não pert
 - **Tela cheia:** com um jogo, vídeo ou apresentação em tela cheia na frente, ela some
   e volta depois.
 - **Configurações → Na área de trabalho:** mostrar ou esconder, tamanho (90 a 240 px),
-  passear, avisar respostas, sumir em tela cheia e o comportamento ao fechar a janela.
+  passear, subir nas janelas abertas, avisar respostas, sumir em tela cheia e o
+  comportamento ao fechar a janela.
   Para desligar no arranque, use `ASSISTANT_MASCOT=0`.
 
-Como funciona: ela é desenhada em código com o Pillow (`app/mascot/sprite.py`, sem
-imagens) e mostrada numa janela Win32 em camadas com alfa por pixel
-(`app/mascot/win32.py`). Os pixels transparentes deixam os cliques passarem para o que
-estiver atrás. Uma janela transparente do pywebview foi testada e pinta o fundo de
+Como funciona: a arte são 20 folhas de sprites (`app/mascot/assets/source/`, uma por
+animação: andar, humores, falar, piscar, sentar, sentada, virar, levantar, arrastada,
+pular, cair, escalar, beirada, espiar, chá, ler, fechar o livro, olhar, pensar e
+cochilar). O script `scripts/build_mascot_sprites.py` recorta os quadros. Ele tira o
+fundo pelo alfa ou pelo branco e as sombras do chão pela cor, e iguala a escala pela
+altura dela de pé. Em cada quadro ele marca o ponto de apoio: as solas, o assento na
+beirada, a ponta do cursor desenhado quando arrastada ou a borda da tela quando espia.
+O resultado é o atlas `app/mascot/assets/victorique.webp` + `victorique.json` (WebP com
+alfa sem perda, cerca de 1,7 MB). Para gerar de novo, rode
+`.venv\Scripts\python.exe scripts\build_mascot_sprites.py` (cerca de 10 s;
+`--debug PASTA` grava folhas de conferência). Duas folhas (arrastada e cair) têm um
+traço um pouco diferente, com tiara em vez da touca, e foram usadas como vieram.
+
+`sprite.py` lê o atlas, escala, espelha as vistas de lado conforme a direção e desenha
+os «z». A lista de janelas abertas vem do Win32 (`EnumWindows`, da frente para trás,
+com o retângulo visível pelo DWM) a cada 0,4 s, e a janela sob os pés dela é relida a
+cada quadro. `surfaces.py` transforma isso nos trechos onde ela pode andar. Ela é
+mostrada numa janela Win32 em camadas com alfa por pixel (`app/mascot/win32.py`). Os
+pixels transparentes deixam os cliques passarem para o que estiver atrás. Uma janela transparente do pywebview foi testada e pinta o fundo de
 cinza no WebView2, por isso não foi usada. O comportamento (`behavior.py`) é lógica
 pura; `desktop.py` junta tudo na thread da janela, e `bus.py` liga a API da conversa a
 ela no mesmo processo. No navegador (`--browser`) ela não aparece e os balões ficam na
@@ -595,11 +624,17 @@ página.
 Origem: o protocolo de expressões e gestos (`app/core/avatar_protocol.py`), o parser
 que tira os marcadores do fluxo e o ritmo de piscadas e gestos vêm do projeto irmão
 [Victorique-IA-2](https://github.com/Nyzius/Victorique-IA-2), feito sobre esta mesma
-base. O retrato em CSS de lá não foi usado: a figura aqui é outra, de corpo inteiro.
+base. O retrato em CSS de lá não foi usado. As folhas de sprites foram fornecidas pelo
+dono do projeto; a primeira versão da miniatura era desenhada em código com o Pillow.
 
 Verificação em 23/11/2026: testes automatizados (`tests/test_mascot.py`,
 `tests/test_avatar_protocol.py` e dois casos novos em `tests/test_claude_backend.py`).
 Na área de trabalho real: a transparência e os cliques atravessando os pixels vazios, a
-caminhada, o cachimbo, a queda depois de arrastada e o balão. No app completo
+caminhada, a queda depois de arrastada e o balão. Com os sprites e as janelas
+(`tests/test_mascot.py` com 42 testes: atlas, bordas visíveis, pouso, carona na janela
+arrastada, queda quando ela fecha ou é coberta, escalada, pulo e arremesso), numa
+janela de teste no desktop real: ela pousou na barra de título, foi junto quando a
+janela foi arrastada, sentou na beirada, escalou a lateral e caiu na barra de tarefas
+quando a janela fechou. No app completo
 (`run.py`): a fala chegou ao balão, fechar a janela só a escondeu, e «Aceitar o Caso»
 no balão reabriu a conversa com o Caso criado.

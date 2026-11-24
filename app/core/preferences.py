@@ -48,6 +48,7 @@ SCHEMA: Dict[str, tuple] = {
     "mascot_enabled": ("bool", True, None),
     "mascot_size": ("int", 136, (90, 240)),
     "mascot_walk": ("bool", True, None),
+    "mascot_climb": ("bool", True, None),
     "mascot_replies": ("bool", True, None),
     "mascot_hide_fullscreen": ("bool", True, None),
     "mascot_keep_on_close": ("bool", True, None),
