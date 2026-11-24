@@ -818,3 +818,25 @@ kbd { font-size: 0.8em; padding: 2px 7px; border-radius: 6px; border: 1px solid 
   .library-stage { margin: 0 8px 8px; }
   .library-count { display: none; }
 }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* Biblioteca: hand edits (move, rename, Reserva) */
+.book-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.book-reserve.armed { color: var(--danger); background: rgba(229, 103, 93, 0.12); }
+.book-move-list { display: flex; flex-direction: column; gap: 1px; margin-top: 8px; max-height: 168px; overflow-y: auto; }
+.book-move-list button, .book-menu button {
+  text-align: left; padding: 6px 10px; border-radius: 7px; color: var(--text); font-size: 0.88em;
+}
+.book-move-list button:hover, .book-move-list button:focus-visible,
+.book-menu button:hover, .book-menu button:focus-visible { background: var(--hover); outline: none; }
+.book-rename { display: flex; gap: 6px; margin-top: 8px; }
+.book-rename input {
+  flex: 1; min-width: 0; padding: 6px 9px; border-radius: 8px; font: inherit; font-size: 0.88em;
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+}
+.book-rename input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.book-menu {
+  position: absolute; z-index: 4; min-width: 196px; padding: 4px; display: flex; flex-direction: column;
+  border-radius: 10px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow);
+}

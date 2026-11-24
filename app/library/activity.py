@@ -62,6 +62,18 @@ def record(kind: str, src: Optional[str], dst: Optional[str] = None, actor: str 
             _events.append(event)
     except Exception:
         logger.debug("Biblioteca: atividade não registrada", exc_info=True)
+        return
+    if event["src_section"] or event["dst_section"]:
+        _tell_presence()
+
+
+def _tell_presence() -> None:
+    """Work on the shelves takes her to the Biblioteca (app/library/presence)."""
+    try:
+        from app.library import presence  # lazy: presence never blocks the operation
+        presence.presence.note_work()
+    except Exception:
+        logger.debug("Biblioteca: presença não avisada", exc_info=True)
 
 
 def record_moves(kind: str, moves: Iterable[Tuple[Any, Any]], actor: str = "victorique") -> None:
@@ -83,7 +95,12 @@ def since(seq: int = 0) -> Dict[str, Any]:
     with _lock:
         events = [e for e in _events if e["seq"] > seq]
         last = _seq
-    return {"events": events, "last": last}
+    try:
+        from app.library import presence
+        where = presence.presence.snapshot()
+    except Exception:
+        where = None
+    return {"events": events, "last": last, "presence": where}
 
 
 def clear() -> None:

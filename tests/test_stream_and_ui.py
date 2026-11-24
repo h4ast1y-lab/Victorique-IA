@@ -293,3 +293,42 @@ def test_library_hall_page_is_wired():
     node = shutil.which("node")
     if node:
         subprocess.run([node, "--check", str(ui_dir / "js" / "library.js")], check=True)
+
+
+def test_library_hall_follows_her_presence():
+    """One Victorique: the hall shows her only when the server says she is there."""
+    ui_dir = BASE_DIR / "app" / "ui"
+    html = (ui_dir / "index.html").read_text(encoding="utf-8")
+    js = (ui_dir / "js" / "library.js").read_text(encoding="utf-8")
+    assert 'id="btnLibraryCall"' in html
+    for needle in ("applyPresence", "reportHall", "visibilitychange", "/api/library/presence",
+                   "left_hall", "hall_open", "herWhere", "doorOpen"):
+        assert needle in js, needle
+
+
+def test_library_hand_edits_are_wired():
+    """Drag a book to another shelf or the cart, right-click it, or use the card."""
+    ui_dir = BASE_DIR / "app" / "ui"
+    html = (ui_dir / "index.html").read_text(encoding="utf-8")
+    js = (ui_dir / "js" / "library.js").read_text(encoding="utf-8")
+    for ident in ("btnBookMove", "btnBookRename", "btnBookReserve", "bookMoveList",
+                  "bookRenameForm", "bookRenameInput", "bookMenu"):
+        assert f'id="{ident}"' in html, ident
+    for route in ("/api/library/books/move", "/api/library/books/rename", "/api/library/books/reserve"):
+        assert route in js, route
+    assert "contextmenu" in js and "bookDrag" in js
+
+
+def test_index_page_is_never_cached(client):
+    """A stale index.html with a new library.js breaks the hall after an update."""
+    r = client.get("/")
+    assert r.status_code == 200 and "no-store" in r.headers.get("cache-control", "")
+
+
+def test_hall_waits_for_her_to_leave_the_desktop():
+    """While she walks to her door on the desktop ("entrando") the hall must not show her."""
+    js = (BASE_DIR / "app" / "ui" / "js" / "library.js").read_text(encoding="utf-8")
+    body = js.split("function applyPresence", 1)[1].split("\n  function ", 1)[0]
+    assert "const here = p.state === 'biblioteca';" in body
+    assert "const onTheWay = p.state === 'entrando';" in body
+    assert "Ela está a caminho da porta" in js

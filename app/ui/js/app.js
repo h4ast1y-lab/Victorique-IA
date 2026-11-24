@@ -2297,6 +2297,8 @@ function initVisualState() {
     acceptCase: event => acceptLifeCase(event),
     // "Abrir na janela grande" in the small chat by her side.
     openConversation: id => switchConversation(String(id)),
+    // «Assistir» in her balloon, or «Ir para a Biblioteca» in her menu.
+    openLibrary: () => showSidebarTab('hall'),
   };
 }
 

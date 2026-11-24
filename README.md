@@ -327,6 +327,7 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 | Matemática em LaTeX (KaTeX local, sem internet) | implementado; testado automaticamente (Node) e no navegador (seção 15) |
 | Conversa rápida: um clique na mascote abre uma janelinha de chat ao lado dela | implementado; testado automaticamente e a página no navegador; o clique na mascote real não foi automatizado (seção 16) |
 | Biblioteca: salão em pixel art, uma estante por pasta e um livro por arquivo; ela encena o que faz nos arquivos | implementado; testado automaticamente e no navegador, com uma ação real do organizador (seção 17) |
+| Uma Victorique só: a mascote passa por uma portinha e vai trabalhar na Biblioteca; mover, renomear e mandar para a Reserva à mão no salão | implementado; testado automaticamente e no navegador; a porta na área de trabalho de verdade ainda não foi vista (seção 17) |
 | Modo Codex (CLI da OpenAI), somente leitura | implementado; testado com um processo falso; não testado com o Codex real (seção 18) |
 
 ---
@@ -361,8 +362,10 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 - `GET /api/codex/status` (Codex instalado, comando, pasta de trabalho, modelo,
   último erro e os passos de instalação)
 - `GET/POST /api/library/sections`, `DELETE /api/library/sections/{id}`,
-  `GET /api/library/sections/{id}/books`, `GET /api/library/activity?since=N`,
-  `POST /api/library/pick-folder` (Biblioteca, seção 17)
+  `GET /api/library/sections/{id}/books`, `GET /api/library/activity?since=N` (com
+  `presence`: onde ela está), `POST /api/library/pick-folder` (Biblioteca, seção 17)
+- `POST /api/library/presence` (`hall_open`, `enter`, `left_hall`) e
+  `POST /api/library/books/move|rename|reserve` (edição à mão no salão, seção 17)
 - `GET /api/mascot/atlas` e `GET /api/mascot/atlas.json` (sprites dela para a
   Biblioteca), `POST /api/mascot/open-conversation` (a conversa rápida passa a
   conversa para a janela grande)
@@ -392,7 +395,7 @@ O evento SSE `meta` chega antes dos tokens e já contém `conversation_id`; o ev
   tool calling (JSON textual, `tool_calls` nativo, ferramenta protegida pendente,
   limite de rodadas, fallback sem suporte), OCR de PDF só-imagem, voz (TTS/STT) e
   servidor llama.cpp.
-- Resultado da rodada de 24/11/2026: **339 testes passando e 3 pulados** (os testes
+- Resultado da rodada de 24/11/2026: **383 testes passando e 3 pulados** (os testes
   marcados `live_ollama` requerem o Ollama rodando e são pulados quando ele está offline).
 - A suíte roda com os padrões de fábrica (turbo e acesso total desligados).
 - E2E real com `llama-cpp-server` + `Qwen_Qwen3.5-9B-IQ4_XS.gguf`: chat funcionou
@@ -416,7 +419,8 @@ app/
   voice/      __init__.py   (TTS pyttsx3/SAPI5 + STT SpeechRecognition/Sphinx)
   memory/     database.py, conversation_store.py, memory_store.py, project_store.py
   life/       observer.py, policy.py, folders.py, lines.py, generator.py, service.py
-  library/    sections.py (seções = pastas), activity.py (o que ela faz nos arquivos)
+  library/    sections.py (seções = pastas), activity.py (o que ela faz nos arquivos),
+              presence.py (onde ela está), editing.py (edição à mão no salão)
   claude_code/ backend.py, options.py, permissions.py, victorique_tools.py
   codex/      backend.py  (modo Codex: `codex exec --json`, somente leitura)
   mascot/     sprite.py, behavior.py, surfaces.py, balloon.py, win32.py, desktop.py, bus.py,
@@ -742,9 +746,48 @@ altura pelo tamanho. A antiga aba de documentos indexados agora se chama **Docum
   lê, toma chá, pensa e cochila.
 - **Onde fica:** as seções em `data/library.json`; as ações só na memória (as últimas 200).
 
+### Uma Victorique só
+
+A mascote da área de trabalho e a do salão são a mesma. O servidor sabe onde ela está
+(`app/library/presence.py`): na área de trabalho, entrando, na Biblioteca ou saindo.
+
+- **Ela vai à Biblioteca** quando você abre a aba, quando mexe em arquivos das estantes a
+  pedido (na conversa ou na conversa rápida) e pelo item «Ir para a Biblioteca» do menu
+  dela, que também abre a janela nessa aba. Ler um arquivo fora das estantes não a tira
+  da área de trabalho.
+- **A porta:** na área de trabalho, ela anda até a ponta de onde está, uma portinha
+  aparece, ela passa e some. No salão, ela entra pela porta da esquerda. Na volta é o
+  contrário, e ela reaparece onde saiu (no chão, se a janela onde estava fechou).
+- **Com a aba fechada:** ela trabalha fora de vista e um balão «Fui à Biblioteca cuidar dos
+  seus livros.» aparece onde ficava a porta; «Assistir» abre a janela na aba Biblioteca.
+  A janela nunca abre sozinha.
+- **A volta:** ao sair da aba (ou esconder a janela), 30 s sem trabalho fora de vista e
+  5 min parada com a aba aberta. Com ela fora, o salão mostra «Chamar a Victorique».
+- **Sem a mascote** (modo navegador, desligada, em tela cheia): ela some ou aparece na
+  hora, sem a caminhada até a porta.
+
+### Edição à mão no salão
+
+Arraste um livro para outra estante (mover) ou para o carrinho da Reserva. O botão
+direito num livro abre «Renomear…», «Mover para…», «Mandar para a Reserva» e «Pedir
+para ela ler»; o cartão do livro tem os mesmos botões, para quem usa o teclado (a Reserva
+pelo cartão pede dois cliques). Ela faz a cena de carregar o livro.
+
+- Sem a barra de aprovação, porque é uma ação sua, mas sempre pelo organizador: cada
+  edição vira um lote em **Organizador**, com Desfazer, e fica no registro de auditoria.
+- Só arquivos do primeiro nível de uma estante; nada é apagado (a Reserva é o descarte) e
+  o conteúdo dos arquivos não é editado.
+- Nome que já existe, nome inválido no Windows ou livro que sumiu da pasta: um aviso com
+  o motivo, e o livro volta ao lugar.
+
 Verificação em 24/11/2026: `tests/test_library.py` (11 testes) e a página no navegador
 com três pastas de teste: estantes, cartão do livro, formulário com erro e uma ação real
 do organizador desfeita pelo servidor, com ela carregando o PDF de volta à estante certa.
+Depois, `tests/test_library_presence.py`, `tests/test_library_editing.py` e os testes da
+porta em `tests/test_mascot.py`; no navegador: ela entrando pela porta, um livro
+arrastado entre estantes e outro até o carrinho, renomear pelo cartão, a Reserva pelo
+botão direito, a saída ao trocar de aba e «Chamar a Victorique». A caminhada até a porta
+na área de trabalho de verdade não foi vista (não dá para testar daqui).
 
 ---
 

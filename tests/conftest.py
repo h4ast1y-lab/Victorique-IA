@@ -61,3 +61,28 @@ def test_data_dir() -> Path:
 def client() -> TestClient:
     from app.main import app
     return TestClient(app, base_url="http://127.0.0.1:8765")
+
+
+@pytest.fixture
+def library(tmp_path, monkeypatch):
+    """An empty library.json and a fake home with some of the default folders."""
+    from app.library import activity, sections
+    from app.security.path_guard import path_guard
+    store = tmp_path / "library.json"
+    home = tmp_path / "home"
+    for name in ("Downloads", "Documents", "Pictures"):
+        (home / name).mkdir(parents=True)
+    monkeypatch.setattr(sections, "_store_path", lambda: store)
+    monkeypatch.setattr(sections, "default_folders", lambda: [
+        (ident, label, home / folder)
+        for ident, label, _guid, folder in sections._DEFAULTS
+        if (home / folder).is_dir()
+    ])
+    monkeypatch.setenv("ASSISTANT_LIBRARY_DEFAULTS", "1")
+    monkeypatch.delenv("ASSISTANT_AUTHORIZED_DIRS", raising=False)
+    before = list(path_guard.authorized_dirs)
+    activity.clear()
+    yield {"home": home, "store": store, "root": tmp_path}
+    path_guard.authorized_dirs[:] = before
+    sections._authorized.clear()
+    activity.clear()

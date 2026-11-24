@@ -63,6 +63,12 @@ class ChatWindowBridge:
         script = f"window.victoriqueDesktop && window.victoriqueDesktop.acceptCase({payload})"
         self._later(lambda: self.window.evaluate_js(script))
 
+    def open_library(self) -> None:
+        """«Assistir» or «Ir para a Biblioteca»: the big window on the Biblioteca tab."""
+        self.open_chat()
+        script = "window.victoriqueDesktop && window.victoriqueDesktop.openLibrary()"
+        self._later(lambda: self.window.evaluate_js(script))
+
     # ----------------- Conversa rápida (mini chat) -----------------
     def toggle_mini_chat(self, x: Optional[int] = None, y: Optional[int] = None) -> None:
         """One click on her: opens the small chat beside her, or hides it."""

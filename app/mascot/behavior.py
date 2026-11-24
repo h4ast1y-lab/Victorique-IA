@@ -40,6 +40,10 @@ WALK_SPEED = 40.0
 WALK_FPS = 6.0
 CLIMB_SPEED = 55.0
 TALK_STEP = 0.22
+DOOR_STEP = 0.15                # seconds per frame of the little door (closed, ajar, open)
+PASS_SECONDS = 0.6              # walking through the doorway
+HURRY = 2.5                     # she walks faster to her door (the hall is waiting)
+DOOR_GAP = 0.35                 # the door stands this many heights beyond her
 TURN_STEP = 0.09
 WALK_FRAMES = 6
 
@@ -90,6 +94,7 @@ class Brain:
         self.facing = 1
         self.mode = "idle"   # idle walk turn act sit_down sit stand_up sleep edge
         #                      held air crouch land climb arrive peek
+        #                      door_in away door_out (the Biblioteca's door)
         self.mode_t0 = 0.0
         self.until = 0.0
         self.surface_key = "ground"
@@ -116,6 +121,13 @@ class Brain:
         self.talk_until = 0.0
         self.placed = False
         self.now = 0.0
+        # The little door to the Biblioteca (app/library/presence).
+        self.leaving = False
+        self.hidden = False
+        self.door: Optional[Tuple[float, float, int]] = None   # x, y, frame 0..2
+        self.away_spot: Optional[Tuple[float, str, int]] = None  # x, surface, side
+        self._door_x = 0.0
+        self._door_from = 0.0
 
     @property
     def scale(self) -> float:
@@ -157,6 +169,8 @@ class Brain:
 
     def grab(self, now: float) -> None:
         self._clear()
+        self.door = None
+        self.hidden = False
         self.surface_key = ""
         self.ride_ref = None
         self._set_mode("held", now)
@@ -195,10 +209,15 @@ class Brain:
              climb: bool = True, busy: bool = False) -> None:
         """Advances `dt` seconds. `busy` = a balloon is open (she stays put)."""
         self.now = now
+        if self.mode == "away":
+            return
         self.height = float(world.height)
         if not self.placed:
             self.place(world, now)
         dt = max(0.0, min(dt, 0.25))
+        if self.mode in ("door_in", "door_out"):
+            self._door_step(now)
+            return
         if self.mode == "held":
             return
         if self.mode == "air":
@@ -210,6 +229,9 @@ class Brain:
         if not self._stand(world, now):
             return
         self._expire(now)
+        if self.leaving:
+            self._head_for_door(dt, now, world)
+            return
         state = self.app_state
         busy = busy or now < self.talk_until or state in BUSY_STATES
         if self.gesture and now - self.gesture_at > GESTURE_WAIT:
@@ -443,6 +465,8 @@ class Brain:
         lo, hi = self._walk_range(self._here(world))
         target = min(max(self.target_x, lo), hi)
         step = WALK_SPEED * self.scale * dt
+        if self.plan and self.plan.get("kind") == "door":
+            step *= HURRY
         dx = target - self.x
         if abs(dx) <= step:
             self.x = target
@@ -467,6 +491,9 @@ class Brain:
 
             self._play([("climb", 0, 0.2), ("climb", 1, 0.3)], now, "turn", climb)
             return
+        if plan and plan["kind"] == "door":
+            self._open_door("door_in", plan["dir"], now)
+            return
         if plan and plan["kind"] == "hop":
             self._launch(self.x + plan["dir"] * h * 0.8, self.y + h * 4, now)
             return
@@ -485,6 +512,108 @@ class Brain:
         back = list(reversed(TURN_TO[self.facing]))
         self._play(seq("turn", back, 1 / TURN_STEP), now, "turn",
                    lambda t: self._idle(t, 3.0, 9.0))
+
+    # ----------------- The Biblioteca's door -----------------
+    @property
+    def is_away(self) -> bool:
+        return self.mode == "away"
+
+    def go_away(self, now: float) -> None:
+        """Walk to the nearest end of where she stands and go through a little door."""
+        if self.mode in ("away", "door_in"):
+            return
+        self.leaving = True
+
+    def vanish(self, now: float) -> None:
+        """Gone at once (nobody could see her go)."""
+        self._clear()
+        self.away_spot = (self.x, self.surface_key or "ground", self.facing)
+        self.leaving = False
+        self.hidden = True
+        self.door = None
+        self._set_mode("away", now)
+
+    def come_back(self, now: float, world: World) -> None:
+        """Out of the little door where she left; or, still going, she changes her mind."""
+        if self.mode == "away":
+            x, key, side = self.away_spot or (world.ground.right - 1.3 * self.height, "ground", 1)
+            surface = world.find(key, x, self.height * 0.15) if key not in ("", "ground") else None
+            surface = surface or world.ground
+            lo, hi = self._walk_range(surface)
+            x = min(max(x, lo), hi)
+            self.height = float(world.height)
+            self.surface_key = surface.key
+            self.ride_ref = None
+            self.x, self.y = x, float(surface.y)
+            self.placed = True
+            self._open_door("door_out", side, now)
+            return
+        if self.leaving or self.mode == "door_in":
+            self.leaving = False
+            self.hidden = False
+            self.door = None
+            self._idle(now, 1.0, 3.0)
+
+    def _head_for_door(self, dt: float, now: float, world: World) -> None:
+        if self.mode == "walk" and self.plan and self.plan.get("kind") == "door":
+            self._walk(dt, now, world, True)
+            return
+        if self.script and self.mode in ("turn", "stand_up"):
+            self._run_script(now)
+            return
+        if self.mode in ("sit", "sleep", "sit_down"):
+            self._clear()
+            self._play(seq("stand_up", range(6), 8.0), now, "stand_up",
+                       lambda t: self._set_mode("idle", t))
+            return
+        lo, hi = self._walk_range(self._here(world))
+        side = -1 if self.x - lo <= hi - self.x else 1
+        self._clear()
+        self._start_walk(lo if side < 0 else hi, now, {"kind": "door", "dir": side})
+
+    def _open_door(self, mode: str, side: int, now: float) -> None:
+        self._clear()
+        self.leaving = False
+        self.facing = side if mode == "door_in" else -side
+        gap = DOOR_GAP * self.height
+        self._door_x = self.x + side * gap
+        self._door_from = self.x if mode == "door_in" else self._door_x
+        self.away_spot = (self.x, self.surface_key or "ground", side)
+        self.hidden = mode == "door_out"
+        if mode == "door_out":
+            self.x = self._door_x
+        self.door = (self._door_x, self.y, 0)
+        self._set_mode(mode, now)
+
+    def _door_step(self, now: float) -> None:
+        t = now - self.mode_t0
+        opening = 3 * DOOR_STEP
+        spot = self.away_spot[0] if self.away_spot else self.x
+        start, end = (self._door_from, self._door_x) if self.mode == "door_in" else (self._door_x, spot)
+        if t < opening:
+            self.door = (self._door_x, self.y, min(2, int(t / DOOR_STEP)))
+            return
+        if t < opening + PASS_SECONDS:
+            self.hidden = False
+            p = (t - opening) / PASS_SECONDS
+            self.x = start + (end - start) * p
+            self.walk_phase = t * WALK_FPS
+            self.door = (self._door_x, self.y, 2)
+            return
+        self.x = end
+        closing = t - opening - PASS_SECONDS
+        if self.mode == "door_in":
+            self.hidden = True
+        if closing < opening:
+            self.door = (self._door_x, self.y, 2 - min(2, int(closing / DOOR_STEP)))
+            return
+        self.door = None
+        if self.mode == "door_in":
+            self._set_mode("away", now)
+        else:
+            self.hidden = False
+            self.facing = 1 if spot >= self._door_x else -1
+            self._idle(now, 1.5, 4.0)
 
     def _stand_up(self, now: float) -> None:
         self._play(seq("stand_up", range(6), 8.0), now, "stand_up",
@@ -655,6 +784,8 @@ class Brain:
             return Look("fall", int(t * 8) % 3, facing)
         if mode == "climb":
             return Look("climb", 2 + int(t * 6) % 8, facing)
+        if mode in ("door_in", "door_out") and self.door and self.door[2] == 2 and not self.hidden:
+            return Look("walk", int(self.walk_phase) % WALK_FRAMES, facing)
         if mode == "sleep":
             return Look("sitting", 3, facing, "zzz", int(now * 3) % 9)
         if mode == "sit":

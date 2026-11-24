@@ -283,10 +283,11 @@
             <h2 id="libraryTitle">Biblioteca</h2>
             <p class="library-status" id="libraryStatus" aria-live="polite">Olhando as estantes</p>
           </div>
+          <button class="btn btn-secondary btn-sm" id="btnLibraryCall" type="button" hidden>Chamar a Victorique</button>
           <span class="library-count" id="libraryCount"></span>
         </header>
         <div class="library-stage" id="libraryStage">
-          <canvas id="libraryCanvas" tabindex="0" aria-label="O salão da Biblioteca: cada estante é uma pasta e cada livro, um arquivo. Clique num livro para ver os detalhes; use as setas para olhar o salão."></canvas>
+          <canvas id="libraryCanvas" tabindex="0" aria-label="O salão da Biblioteca: cada estante é uma pasta e cada livro, um arquivo. Clique num livro para ver os detalhes, arraste-o para outra estante ou para o carrinho da Reserva, ou use o botão direito; use as setas para olhar o salão."></canvas>
           <div class="library-empty" id="libraryEmpty" hidden>
             <p>A Biblioteca ainda não tem estantes. Cada pasta que você vincular vira uma estante, e cada arquivo dela, um livro.</p>
             <button class="btn btn-primary btn-sm" id="btnLibraryEmptyAdd" type="button"><svg class="ic"><use href="#i-plus"/></svg>Vincular uma pasta</button>
@@ -297,6 +298,23 @@
             <h3 id="bookCardTitle"></h3>
             <dl id="bookCardMeta"></dl>
             <button class="btn btn-primary btn-sm" id="btnBookRead" type="button"><svg class="ic"><use href="#i-book"/></svg>Pedir para ela ler</button>
+            <div class="book-actions">
+              <button class="btn btn-secondary btn-sm" id="btnBookMove" type="button" aria-expanded="false" aria-controls="bookMoveList">Mover para…</button>
+              <button class="btn btn-secondary btn-sm" id="btnBookRename" type="button" aria-controls="bookRenameForm">Renomear</button>
+              <button class="btn btn-ghost btn-sm book-reserve" id="btnBookReserve" type="button">Mandar para a Reserva</button>
+            </div>
+            <div class="book-move-list" id="bookMoveList" role="group" aria-label="Escolha a estante" hidden></div>
+            <form class="book-rename" id="bookRenameForm" hidden>
+              <label class="sr-only" for="bookRenameInput">Novo nome do arquivo</label>
+              <input type="text" id="bookRenameInput" maxlength="255" autocomplete="off" spellcheck="false">
+              <button class="btn btn-primary btn-sm" type="submit">Renomear</button>
+            </form>
+          </div>
+          <div class="book-menu" id="bookMenu" role="menu" aria-label="Livro" hidden>
+            <button type="button" role="menuitem" data-act="rename">Renomear…</button>
+            <button type="button" role="menuitem" data-act="move">Mover para…</button>
+            <button type="button" role="menuitem" data-act="reserve">Mandar para a Reserva</button>
+            <button type="button" role="menuitem" data-act="read">Pedir para ela ler</button>
           </div>
         </div>
       </section>

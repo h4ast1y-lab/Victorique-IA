@@ -35,6 +35,8 @@ from app.tools import organizer
 from app.life.service import life_service
 from app.mascot.bus import mascot_bus
 from app.library import activity as library_activity, sections as library_sections
+from app.library import presence as library_presence_mod
+from app.library import editing as library_editing
 from app.voice import tts_engine, stt_engine
 
 # Initialize database schema on startup
@@ -97,7 +99,9 @@ async def security_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = CSP
-    if request.url.path.startswith("/ui"):
+    if request.url.path == "/" or request.url.path.startswith("/ui"):
+        # The page and its scripts change together; a cached index.html with a
+        # newer script would reference elements that do not exist yet.
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -1031,6 +1035,12 @@ class LibrarySectionCreate(BaseModel):
     name: Optional[str] = Field(None, max_length=60)
 
 
+class LibraryPresence(BaseModel):
+    hall_open: Optional[bool] = None   # the Biblioteca tab opened or closed
+    enter: bool = False                # "Chamar a Victorique"
+    left_hall: bool = False            # she went out through the hall's door
+
+
 @app.get("/api/library/sections")
 async def library_list_sections():
     return await asyncio.to_thread(library_sections.list_sections)
@@ -1065,6 +1075,61 @@ async def library_books(section_id: str, limit: int = library_sections.MAX_BOOKS
 @app.get("/api/library/activity")
 async def library_activity_since(since: int = 0):
     return library_activity.since(max(0, since))
+
+
+class LibraryBookMove(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    section_id: str = Field(min_length=1, max_length=80)
+
+
+class LibraryBookRename(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    new_name: str = Field(max_length=255)
+
+
+class LibraryBook(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+
+
+async def _edit_book(fn, *args):
+    """Hand edits from the hall: the organizer's errors become clear HTTP answers."""
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except library_editing.BookNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/library/books/move")
+async def library_move_book(req: LibraryBookMove):
+    return await _edit_book(library_editing.move_book, req.path, req.section_id)
+
+
+@app.post("/api/library/books/rename")
+async def library_rename_book(req: LibraryBookRename):
+    return await _edit_book(library_editing.rename_book, req.path, req.new_name)
+
+
+@app.post("/api/library/books/reserve")
+async def library_reserve_book(req: LibraryBook):
+    return await _edit_book(library_editing.reserve_book, req.path)
+
+
+@app.post("/api/library/presence")
+async def library_presence(req: LibraryPresence):
+    where = library_presence_mod.presence
+    if req.hall_open is not None:
+        where.set_hall_open(req.hall_open)
+    if req.enter:
+        where.enter("menu")
+    if req.left_hall:
+        where.left_hall()
+    return where.snapshot()
 
 
 def _pick_folder():

@@ -127,22 +127,22 @@ def _tell_life(kind: str, description: str, moved: int) -> None:
         pass
 
 
-def _tell_library(kind: str, moves: List[Move]) -> None:
+def _tell_library(kind: str, moves: List[Move], actor: str = "victorique") -> None:
     """She carries the books in the Biblioteca (app/library)."""
     try:
         from app.library import activity  # lazy: UI-facing, never blocks the operation
-        activity.record_moves(kind, moves)
+        activity.record_moves(kind, moves, actor)
     except Exception:
         pass
 
 
-def _run(kind: str, description: str, moves: List[Move]) -> Dict[str, Any]:
+def _run(kind: str, description: str, moves: List[Move], actor: str = "victorique") -> Dict[str, Any]:
     with _lock:
         _validate(moves)
         _apply(moves)
         batch = _record(kind, description, moves)
     _tell_life(kind, description, len(moves))
-    _tell_library(kind, moves)
+    _tell_library(kind, moves, actor)
     return {
         "status": "done",
         "batch_id": batch["id"],
@@ -172,24 +172,25 @@ def _reserve_destination(path: Path, stamp: str) -> Path:
 
 
 # ----------------- Public tools -----------------
-def move_files(moves: List[Dict[str, str]], descricao: str = "") -> Dict[str, Any]:
+def move_files(moves: List[Dict[str, str]], descricao: str = "", actor: str = "victorique") -> Dict[str, Any]:
     """Plano de movimentos [{"origem": ..., "destino": ...}], executado em lote."""
     if not isinstance(moves, list):
         raise ValueError("'moves' deve ser uma lista de {origem, destino}.")
     pairs = [_resolve_pair(m.get("origem") or m.get("src"), m.get("destino") or m.get("dst"))
              for m in moves if isinstance(m, dict)]
-    return _run("move", descricao or f"Mover {len(pairs)} item(ns)", pairs)
+    return _run("move", descricao or f"Mover {len(pairs)} item(ns)", pairs, actor)
 
 
-def rename_file(path: str, new_name: str) -> Dict[str, Any]:
+def rename_file(path: str, new_name: str, descricao: str = "", actor: str = "victorique") -> Dict[str, Any]:
     new_name = (new_name or "").strip()
     if not new_name or any(sep in new_name for sep in ("/", "\\")) or new_name in (".", ".."):
         raise ValueError("Informe só o novo nome, sem pastas.")
     src = Path(path).expanduser().resolve()
-    return _run("rename", f"Renomear {src.name} para {new_name}", [(src, src.with_name(new_name))])
+    return _run("rename", descricao or f"Renomear {src.name} para {new_name}",
+                [(src, src.with_name(new_name))], actor)
 
 
-def send_to_reserve(paths: List[str], descricao: str = "") -> Dict[str, Any]:
+def send_to_reserve(paths: List[str], descricao: str = "", actor: str = "victorique") -> Dict[str, Any]:
     """Descarta itens movendo-os para a Reserva (_Quarentena). Nunca apaga."""
     if isinstance(paths, str):
         paths = [paths]
@@ -200,7 +201,7 @@ def send_to_reserve(paths: List[str], descricao: str = "") -> Dict[str, Any]:
         if RESERVE_DIR_NAME in src.parts:
             raise ValueError(f"'{src}' já está na Reserva.")
         moves.append((src, _reserve_destination(src, stamp)))
-    return _run("reserve", descricao or f"Enviar {len(moves)} item(ns) para a Reserva", moves)
+    return _run("reserve", descricao or f"Enviar {len(moves)} item(ns) para a Reserva", moves, actor)
 
 
 def _prune_empty_dirs(emptied: List[Path]) -> None:

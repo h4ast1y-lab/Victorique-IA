@@ -146,10 +146,12 @@ class Clock:
         return self.t
 
 
-def run(brain, clock, w, seconds, dt=0.04, until=None, **kw):
+def run(brain, clock, w, seconds, dt=0.04, until=None, each=None, **kw):
     for _ in range(int(seconds / dt)):
         clock.t += dt
         brain.step(dt, clock.t, w, **kw)
+        if each:
+            each(brain)
         if until and until(brain):
             return True
     return False
@@ -430,6 +432,83 @@ def test_plain_text_strips_markdown():
     assert "• item" in text
 
 
+
+# ----------------- The little door to the Biblioteca -----------------
+def _gone(brain, clock, w):
+    brain.go_away(clock.t)
+    return run(brain, clock, w, 60, until=lambda b: b.is_away)
+
+
+def test_go_away_walks_to_the_edge_opens_the_door_and_disappears():
+    b, clock, w = Brain(random.Random(1)), Clock(), world()
+    b.place(w, clock.t, x=700)
+    run(b, clock, w, 0.5)
+    frames = set()
+    b.go_away(clock.t)
+    assert run(b, clock, w, 60, until=lambda b: b.is_away,
+               each=lambda b: b.door and frames.add(b.door[2]))
+    assert b.hidden and b.door is None and frames == {0, 1, 2}
+    lo, hi = b._walk_range(w.ground)
+    assert abs(b.away_spot[0] - lo) < 2 or abs(b.away_spot[0] - hi) < 2
+
+
+def test_she_leaves_even_while_the_app_is_thinking():
+    b, clock, w = Brain(random.Random(2)), Clock(), world()
+    b.place(w, clock.t, x=900)
+    b.set_app_state("pensando")
+    assert _gone(b, clock, w)
+
+
+def test_come_back_reappears_at_the_spot_and_idles():
+    b, clock, w = Brain(random.Random(1)), Clock(), world()
+    b.place(w, clock.t, x=300)
+    assert _gone(b, clock, w)
+    spot = b.away_spot
+    b.come_back(clock.t, w)
+    assert run(b, clock, w, 6, until=lambda b: b.mode == "idle")
+    assert not b.hidden and b.door is None and abs(b.x - spot[0]) < 0.5 * b.height
+    assert b.y == 1032
+
+
+def test_come_back_lands_on_the_floor_when_her_window_is_gone():
+    win = WindowBox(hwnd=5, left=400, top=500, right=1200, bottom=900)
+    w = world(win)
+    b, clock = Brain(random.Random(3)), Clock()
+    b.place(w, clock.t, x=700)
+    b.vanish(clock.t)
+    b.away_spot = (700.0, "w5", 1)
+    b.come_back(clock.t, world())
+    assert run(b, clock, world(), 6, until=lambda b: b.mode == "idle")
+    assert b.surface_key == "ground" and b.y == 1032
+
+
+def test_away_ignores_steps_and_states():
+    b, clock, w = Brain(random.Random(1)), Clock(), world()
+    b.place(w, clock.t, x=700)
+    b.vanish(clock.t)
+    b.set_app_state("pensando")
+    run(b, clock, w, 3)
+    assert b.is_away and b.hidden
+
+
+def test_come_back_while_going_cancels():
+    b, clock, w = Brain(random.Random(1)), Clock(), world()
+    b.place(w, clock.t, x=900)
+    b.go_away(clock.t)
+    run(b, clock, w, 0.3)
+    b.come_back(clock.t, w)
+    assert not b.leaving and not b.hidden and b.door is None
+    run(b, clock, w, 5)
+    assert not b.is_away
+
+
+def test_door_image_frames():
+    imgs = [sprite.door_image(f, 136) for f in (0, 1, 2)]
+    assert all(i.height == 102 and i.mode == "RGBA" for i in imgs)
+    assert imgs[0].tobytes() != imgs[1].tobytes() != imgs[2].tobytes()
+    assert imgs[0].getchannel("A").getextrema()[0] == 0   # transparent around it
+
+
 # ----------------- Controller (fake window) -----------------
 class FakeWindow:
     hwnd = 777
@@ -501,6 +580,23 @@ class FakeBridge:
     def open_conversation(self, conversation_id):
         self.calls.append(("open_conversation", conversation_id))
 
+    def open_library(self):
+        self.calls.append(("open_library",))
+
+
+class FakePresence:
+    def __init__(self):
+        self.calls = []
+
+    def mascot_left(self):
+        self.calls.append("mascot_left")
+
+    def enter(self, reason, announce=False):
+        self.calls.append(("enter", reason))
+
+    def tick(self):
+        self.calls.append("tick")
+
 
 def make_mascot(prefs=None, foreground=None, windows=()):
     clock = Clock()
@@ -527,6 +623,7 @@ def make_mascot(prefs=None, foreground=None, windows=()):
         window_box_fn=one_window,
         clock=clock,
         rng=random.Random(5),
+        presence=FakePresence(),
     )
     return m, clock, cursor, state
 
@@ -896,3 +993,112 @@ def test_disabled_mascot_leaves_the_page_balloon(client):
         assert client.post("/api/mascot/say", json={"category": "tarde", "text": "Tarde."}).json() == {"shown": False}
     finally:
         mascot_bus.detach(m)
+
+
+# ----------------- One Victorique: the desktop mascot goes to the Biblioteca -----------------
+def _away(m, clock, command="enter-library"):
+    tick(m, clock)
+    m.post("command", command)
+    for _ in range(3000):
+        tick(m, clock)
+        if m.brain.is_away and (command == "enter-library" or m.shown):
+            return
+    raise AssertionError("she never went through the door")
+
+
+def _click_button(m, ident):
+    bx, by, _img, rects = m._layout["balloon"]
+    x0, y0, x1, y1 = rects[ident]
+    px, py = bx + (x0 + x1) // 2, by + (y0 + y1) // 2
+    m._on_event("down", px, py)
+    m._on_event("up", px, py)
+
+
+def test_enter_library_walks_out_hides_and_tells_presence():
+    m, clock, _c, _s = make_mascot()
+    _away(m, clock)
+    tick(m, clock, 5)
+    assert not m.window.visible and not m.on_screen
+    assert m.presence.calls.count("mascot_left") == 1
+
+
+def test_announce_shows_watch_balloon_that_opens_the_library():
+    m, clock, _c, _s = make_mascot()
+    _away(m, clock, "enter-library-announce")
+    tick(m, clock)
+    assert m.shown.kind == "library" and m.window.visible and m.brain.hidden
+    _click_button(m, "watch")
+    assert ("open_library",) in m.bridge.calls and m.shown is None
+    tick(m, clock)
+    assert not m.window.visible
+
+
+def test_hidden_mascot_vanishes_at_once_and_stays_hidden_when_shown_again():
+    m, clock, _c, state = make_mascot(prefs={"mascot_enabled": False})
+    tick(m, clock)
+    m.post("command", "enter-library")
+    tick(m, clock)
+    assert m.brain.is_away and m.presence.calls.count("mascot_left") == 1
+    state["prefs"]["mascot_enabled"] = True
+    m._next_prefs = 0
+    tick(m, clock, 100)
+    assert not m.window.visible
+
+
+def test_return_from_library_reappears_where_she_left():
+    m, clock, _c, _s = make_mascot()
+    _away(m, clock)
+    x = m.brain.away_spot[0]
+    m.post("command", "return-from-library")
+    tick(m, clock, 150)
+    assert m.window.visible and not m.brain.hidden and not m.brain.is_away
+    assert abs(m.brain.x - x) < 0.5 * m.brain.height
+
+
+def test_menu_has_go_to_library_and_it_opens_the_hall():
+    m, clock, _c, _s = make_mascot()
+    tick(m, clock)
+    m.window.menu_choice = 8
+    m._on_event("rclick", *_sprite_point(m))
+    assert any("Ir para a Biblioteca" in str(item) for item in m.window.menu)
+    assert ("enter", "menu") in m.presence.calls and ("open_library",) in m.bridge.calls
+
+
+def test_no_mini_chat_while_away_and_presence_is_ticked():
+    m, clock, _c, _s = make_mascot()
+    _away(m, clock)
+    m._pending_click = clock.t
+    tick(m, clock)
+    m._toggle_mini()
+    assert not _mini_calls(m)
+    before = m.presence.calls.count("tick")
+    tick(m, clock, 100)                     # 4 s
+    assert 3 <= m.presence.calls.count("tick") - before <= 5
+
+
+def test_bridge_open_library_shows_the_hall(monkeypatch):
+    from pathlib import Path
+    from app.mascot import launcher
+    calls = []
+
+    class Window:
+        def evaluate_js(self, script):
+            calls.append(script)
+
+    bridge = launcher.ChatWindowBridge(Window())
+    monkeypatch.setattr(bridge, "open_chat", lambda: calls.append("open_chat"))
+    monkeypatch.setattr(bridge, "_later", lambda fn: fn())
+    bridge.open_library()
+    assert calls[0] == "open_chat" and "victoriqueDesktop.openLibrary()" in calls[1]
+    js = (Path(launcher.__file__).resolve().parents[1] / "ui" / "js" / "app.js").read_text(encoding="utf-8")
+    assert "openLibrary: () => showSidebarTab('hall')" in js
+
+
+def test_she_hurries_to_the_door():
+    """From the middle of a 1920 px screen she reaches her door well within the 30 s limit."""
+    b, clock, w = Brain(random.Random(4)), Clock(), world()
+    b.place(w, clock.t, x=960)
+    start = clock.t
+    b.go_away(clock.t)
+    assert run(b, clock, w, 30, until=lambda b: b.is_away)
+    assert clock.t - start < 14

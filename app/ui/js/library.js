@@ -94,6 +94,15 @@
     x: 120, facing: 1, anim: 'stand', t0: 0, carrying: null,
     task: null, idleUntil: 0, label: IDLE_LABELS.stand,
   };
+  // One Victorique (app/library/presence): she is either here or on the desktop.
+  // 'out' = on the desktop; 'arriving' / 'leaving' = going through the hall's door.
+  let herWhere = 'out';
+  let departPending = false;
+  let doorOpen = 0;          // 0 closed .. 1 open
+  let doorTarget = 0;
+  let reportedHall = null;
+  const DOOR_SECONDS = 0.45;
+  const AWAY_LABEL = 'Ela está na área de trabalho.';
 
   // ---------- Utilidades ----------
   function readSeq() {
@@ -259,6 +268,7 @@
       try { data = await api('/api/library/activity?since=0'); } catch (_) { return; }
     }
     const events = (data.events || []).filter(hasSection);
+    applyPresence(data.presence);
     if (isOpen) {
       writeSeq(data.last);
       setBadge(0);
@@ -284,7 +294,105 @@
       queue.push(ev);
     }
     while (queue.length > MAX_QUEUE) queue.shift();
-    if (queue.length && her.task && !her.task.scene) her.task = null;  // drop idling
+    if (queue.length && her.task && !her.task.scene && herWhere === 'in') her.task = null;  // drop idling
+  }
+
+  // ---------- Presença: ela entra e sai pela porta ----------
+  function applyPresence(p) {
+    if (!p || !p.state) return;
+    // 'entrando' means she is still walking to her little door on the desktop:
+    // the hall shows her only once she is through it (never two of her at once).
+    const here = p.state === 'biblioteca';
+    const onTheWay = p.state === 'entrando';
+    if (!isOpen) {
+      // Nobody is watching the hall: no door scenes, she is simply there or not.
+      herWhere = here || p.state === 'saindo' ? 'in' : 'out';
+      departPending = false;
+      if (herWhere === 'out') { her.task = null; her.carrying = null; }
+      doorOpen = doorTarget = 0;
+    } else if (here) {
+      if (herWhere === 'out') arrive();
+      else if (herWhere === 'leaving' || departPending) {
+        departPending = false;
+        herWhere = 'in';
+        if (her.task && her.task.door) her.task = null;
+        doorTarget = 0;
+      }
+    } else if (p.state === 'saindo') {
+      if (herWhere === 'in' || herWhere === 'arriving') depart();
+    } else if (onTheWay && herWhere === 'out') {
+      updateCallButton(true);
+      return;
+    } else if (herWhere !== 'out') {           // desktop: she is already gone
+      herWhere = 'out';
+      departPending = false;
+      her.task = null;
+      her.carrying = null;
+      doorTarget = 0;
+    }
+    updateCallButton();
+  }
+
+  function updateCallButton(onTheWay = false) {
+    const btn = byId('btnLibraryCall');
+    if (btn) btn.hidden = herWhere !== 'out' || onTheWay;
+    if (herWhere === 'out') setLabel(onTheWay ? 'Ela está a caminho da porta…' : AWAY_LABEL);
+  }
+
+  function arrive() {
+    herWhere = 'arriving';
+    departPending = false;
+    her.x = world.door;
+    her.facing = 1;
+    her.carrying = null;
+    startTask({
+      label: 'Ela chegou pela porta', scene: true, door: true,
+      steps: [
+        run(() => { doorTarget = 1; }),
+        play('stand', DOOR_SECONDS),
+        walkTo(() => world.door + 74),
+        run(() => { doorTarget = 0; herWhere = 'in'; updateCallButton(); }),
+        play('glance', 0.7),
+      ],
+    }, performance.now() / 1000);
+  }
+
+  function depart() {
+    herWhere = 'leaving';
+    departPending = true;
+    if (her.task && !her.task.scene) her.task = null;   // idling: go now
+  }
+
+  function departTask() {
+    departPending = false;
+    return {
+      label: 'Voltando para a área de trabalho', scene: true, door: true,
+      steps: [
+        walkTo(() => world.door + 40),
+        run(() => { doorTarget = 1; her.facing = -1; }),
+        play('stand', DOOR_SECONDS),
+        walkTo(() => world.door),
+        run(() => {
+          herWhere = 'out';
+          doorTarget = 0;
+          her.task = null;
+          updateCallButton();
+          presencePost({ left_hall: true });
+        }),
+      ],
+    };
+  }
+
+  async function presencePost(body) {
+    try {
+      applyPresence(await api('/api/library/presence', { method: 'POST', body }));
+    } catch (_) { /* the next poll catches up */ }
+  }
+
+  function reportHall(visible) {
+    if (reportedHall === visible) return;
+    reportedHall = visible;
+    return presencePost({ hall_open: visible });
   }
 
   // ---------- Ela: tarefas ----------
@@ -330,6 +438,7 @@
   function putBook(shelf, book, newName) {
     if (newName) book.name = newName;
     book.sparkle = 1;
+    book.pending = false;
     if (shelf) {
       shelf.books.unshift(book);
       layoutShelf(shelf);
@@ -390,7 +499,7 @@
         label: `Renomeando um livro em ${shelf.name}: agora é ${name}`,
         steps: [walkTo(() => shelfCenter(shelf)), play('think', 1.3), run(() => {
           const i = findBook(shelf, oldName);
-          if (i >= 0) { shelf.books[i].name = name; shelf.books[i].sparkle = 1; }
+          if (i >= 0) { shelf.books[i].name = name; shelf.books[i].sparkle = 1; shelf.books[i].pending = false; }
         }), play('glance', 0.6)],
       };
     }
@@ -448,6 +557,10 @@
   }
 
   function nextTask(now) {
+    if (departPending) {
+      startTask(departTask(), now);
+      return;
+    }
     while (queue.length) {
       const ev = queue.shift();
       const task = scene(ev);
@@ -462,6 +575,9 @@
   }
 
   function update(dt, now) {
+    const doorStep = dt / DOOR_SECONDS;
+    doorOpen = doorTarget > doorOpen ? Math.min(doorTarget, doorOpen + doorStep) : Math.max(doorTarget, doorOpen - doorStep);
+    if (herWhere === 'out') return;          // on the desktop: the scenes wait in the queue
     if (!her.task) nextTask(now);
     const task = her.task;
     const step = task.steps[task.i];
@@ -571,6 +687,20 @@
   function drawDoor() {
     const x = world.door - 22;
     rect(x - 4, 146, 52, 154, C.woodDark);
+    if (doorOpen > 0.02) {
+      // The doorway: the dark corridor she comes from, a little lamplight on its floor.
+      rect(x, 150, 44, 150, '#1c140f');
+      rect(x + 4, 284, 36, 16, '#4a3322');
+      const leaf = Math.max(4, Math.round(44 * (1 - doorOpen * 0.86)));
+      rect(x, 150, leaf, 150, C.wood);
+      if (leaf > 20) {
+        rect(x + 4, 158, leaf - 8, 60, C.woodDark);
+        rect(x + 4, 226, leaf - 8, 64, C.woodDark);
+      } else {
+        rect(x + leaf - 2, 150, 2, 150, C.woodDark);
+      }
+      return;
+    }
     rect(x, 150, 44, 150, C.wood);
     rect(x + 5, 158, 15, 60, C.woodDark);
     rect(x + 24, 158, 15, 60, C.woodDark);
@@ -605,6 +735,8 @@
       if (book.hidden) continue;
       const y = book.y - (book.lift ? 5 : 0);
       const isHover = hover && hover.book === book;
+      const faint = book.pending || (bookDrag && bookDrag.moved && bookDrag.hit.book === book);
+      if (faint) ctx.globalAlpha = 0.4;
       rect(book.x, y, book.w, book.h, isHover ? shade(book.color, 30) : book.color);
       rect(book.x, y, book.w, 2, shade(book.color, 26));
       rect(book.x + book.w - 1, y, 1, book.h, shade(book.color, -28));
@@ -622,6 +754,7 @@
         ctx.lineWidth = 1;
         ctx.strokeRect(book.x - 1.5, y - 1.5, book.w + 3, book.h + 3);
       }
+      if (faint) ctx.globalAlpha = 1;
     }
     if (!shelf.books.length) {
       ctx.fillStyle = 'rgba(242, 230, 207, 0.35)';
@@ -776,7 +909,9 @@
     const viewW = w / k;
     if (world.width <= viewW) {
       view.camX = -(viewW - world.width) / 2;
-    } else if (now > view.manualUntil) {
+    } else if (now > view.manualUntil && !pointer && !bookDrag) {
+      // Follows her only while nobody points at the room: a resting cursor
+      // must not end up over a different book than the one it was aimed at.
       const target = Math.max(0, Math.min(world.width - viewW, her.x - viewW / 2));
       view.camX += (target - view.camX) * Math.min(1, dt * 2.5);
     }
@@ -797,7 +932,8 @@
     for (const shelf of shelves) drawShelf(shelf, now);
     drawCart();
     drawFloor(Math.min(x0, 0), Math.max(x1, world.width));
-    drawHer(now);
+    if (herWhere !== 'out') drawHer(now);
+    drawDragged();
     drawLights(lights);
     drawMotes(dt, lights);
     // Vignette, in screen space.
@@ -857,7 +993,7 @@
     for (const shelf of shelves) {
       if (p.x < shelf.x || p.x > shelf.x + shelf.w) continue;
       for (const book of shelf.books) {
-        if (book.hidden) continue;
+        if (book.hidden || book.pending) continue;
         const y = book.y - (book.lift ? 5 : 0);
         if (p.x >= book.x && p.x <= book.x + book.w && p.y >= y && p.y <= y + book.h) return { shelf, book };
       }
@@ -866,14 +1002,32 @@
   }
 
   function hitHer(p) {
+    if (herWhere === 'out') return false;
     return Math.abs(p.x - her.x) < 22 && p.y > FEET - 118 && p.y < FEET + 4;
   }
 
   let drag = null;
   let pointer = null;        // last pointer position over the canvas (client coords)
+  let bookDrag = null;       // {hit, x, y, moved, p, target}: a book carried by the user
+  const BOOK_DRAG_PX = 6;
 
   function onMove(e) {
     pointer = { clientX: e.clientX, clientY: e.clientY };
+    if (bookDrag) {
+      if (!bookDrag.moved && Math.hypot(e.clientX - bookDrag.x, e.clientY - bookDrag.y) > BOOK_DRAG_PX) {
+        bookDrag.moved = true;
+        hideCard();
+        closeMenu();
+        byId('bookTip').hidden = true;
+      }
+      if (bookDrag.moved) {
+        bookDrag.p = worldPoint(e);
+        bookDrag.target = dropAt(bookDrag.p, bookDrag.hit.shelf);
+        canvas.style.cursor = bookDrag.target ? 'grabbing' : 'no-drop';
+        view.manualUntil = performance.now() / 1000 + 6;
+      }
+      return;
+    }
     // While the user points at the room the camera holds still, so the
     // books don't slide away from under the cursor.
     view.manualUntil = Math.max(view.manualUntil, performance.now() / 1000 + 2.5);
@@ -909,10 +1063,27 @@
 
   function onDown(e) {
     if (e.button !== 0) return;
+    closeMenu();
+    const hit = hitBook(worldPoint(e));
+    if (hit) {
+      bookDrag = { hit, x: e.clientX, y: e.clientY, moved: false, p: null, target: null };
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* old engines */ }
+      return;
+    }
     drag = { x: e.clientX, cam: view.camX, moved: false };
   }
 
   function onUp(e) {
+    if (bookDrag) {
+      const { hit, moved, target } = bookDrag;
+      bookDrag = null;
+      try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* not captured */ }
+      if (!moved) { showCard(hit); return; }
+      updateHover();
+      if (target && target.cart) reserveBook(hit.book, hit.shelf);
+      else if (target && target.shelf) moveBook(hit.book, hit.shelf, target.shelf);
+      return;
+    }
     const wasDrag = drag && drag.moved;
     drag = null;
     if (wasDrag) return;
@@ -946,6 +1117,8 @@
       view.camX = Math.max(0, Math.min(world.width - viewW, view.camX + (e.key === 'ArrowRight' ? 60 : -60)));
       view.manualUntil = performance.now() / 1000 + 6;
     } else if (e.key === 'Escape') {
+      bookDrag = null;
+      closeMenu();
       hideCard();
     }
   }
@@ -963,6 +1136,7 @@
       <dt>Modificado</dt><dd>${escape(when)}</dd>
       <dt>Caminho</dt><dd class="book-path">${escape(book.path)}</dd>`;
     const card = byId('bookCard');
+    resetCardEdits();
     card.hidden = false;
     const stage = byId('libraryStage');
     const sp = screenPoint(book.x + book.w + 6, book.y);
@@ -990,6 +1164,206 @@
     chatInput.value = `Leia o arquivo "${book.path}" e me conte, com as suas palavras, do que se trata.`;
     if (typeof autoGrow === 'function') autoGrow();
     sendMessage();
+  }
+
+  // ---------- Edição à mão: mover, renomear, Reserva ----------
+  const CART_ZONE = { top: 236, bottom: 302, w: 70 };
+
+  function dropAt(p, fromShelf) {
+    if (!p) return null;
+    if (p.x >= world.cart && p.x <= world.cart + CART_ZONE.w && p.y >= CART_ZONE.top - 40 && p.y <= CART_ZONE.bottom) {
+      return { cart: true };
+    }
+    const bottom = CASE_TOP + CORNICE + ROWS * (ROW_H + BOARD);
+    if (p.y < CASE_TOP - 8 || p.y > bottom + 8) return null;
+    const shelf = shelves.find(s => p.x >= s.x && p.x <= s.x + s.w);
+    return shelf && shelf !== fromShelf ? { shelf } : null;
+  }
+
+  function drawDragged() {
+    if (!bookDrag || !bookDrag.moved || !bookDrag.p) return;
+    const { target, p } = bookDrag;
+    const book = bookDrag.hit.book;
+    ctx.strokeStyle = C.brass;
+    ctx.lineWidth = 2;
+    if (target && target.cart) {
+      ctx.strokeRect(world.cart - 2, CART_ZONE.top - 6, CART_ZONE.w + 4, CART_ZONE.bottom - CART_ZONE.top + 6);
+    } else if (target && target.shelf) {
+      const bottom = CASE_TOP + CORNICE + ROWS * (ROW_H + BOARD);
+      ctx.strokeRect(target.shelf.x - 4, CASE_TOP - 6, target.shelf.w + 8, bottom - CASE_TOP + 10);
+    }
+    const w = Math.max(10, book.w * 1.6);
+    const h = book.h * 1.2;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(p.x - w / 2 + 3, p.y - h / 2 + 4, w, h);
+    rect(p.x - w / 2, p.y - h / 2, w, h, book.color);
+    rect(p.x - w / 2, p.y - h / 2, w, 3, shade(book.color, 30));
+    rect(p.x - w / 2, p.y - h / 2 + 8, w, 2, shade(book.color, 45));
+  }
+
+  function callHerIfAway() {
+    if (herWhere === 'out') presencePost({ enter: true });
+  }
+
+  async function editBook(book, route, body, verb) {
+    book.pending = true;
+    if (selected && selected.book === book) hideCard();
+    callHerIfAway();
+    try {
+      await api(route, { method: 'POST', body });
+      notifyActivity();
+    } catch (err) {
+      book.pending = false;
+      toast(`Não ${verb}: ${err.message}`, 'error');
+      return false;
+    }
+    scheduleRefresh();
+    return true;
+  }
+
+  function moveBook(book, shelf, target) {
+    if (!target || target === shelf) return Promise.resolve(false);
+    return editBook(book, '/api/library/books/move', { path: book.path, section_id: target.id }, 'movi');
+  }
+
+  function renameBook(book, shelf, newName) {
+    const name = (newName || '').trim();
+    if (!name || name === book.name) return Promise.resolve(false);
+    return editBook(book, '/api/library/books/rename', { path: book.path, new_name: name }, 'renomeei');
+  }
+
+  function reserveBook(book, shelf) {
+    return editBook(book, '/api/library/books/reserve', { path: book.path }, 'mandei para a Reserva');
+  }
+
+  // Card controls (also the keyboard way to do what dragging does).
+  let reserveArmTimer = 0;
+
+  function resetCardEdits() {
+    byId('bookMoveList').hidden = true;
+    byId('btnBookMove').setAttribute('aria-expanded', 'false');
+    byId('bookRenameForm').hidden = true;
+    disarmReserve();
+  }
+
+  function disarmReserve() {
+    clearTimeout(reserveArmTimer);
+    const btn = byId('btnBookReserve');
+    btn.classList.remove('armed');
+    btn.textContent = 'Mandar para a Reserva';
+  }
+
+  function toggleMoveList() {
+    if (!selected) return;
+    const list = byId('bookMoveList');
+    const show = list.hidden;
+    byId('bookRenameForm').hidden = true;
+    list.hidden = !show;
+    byId('btnBookMove').setAttribute('aria-expanded', String(show));
+    if (!show) return;
+    const others = shelves.filter(s => s !== selected.shelf);
+    list.innerHTML = '';
+    if (!others.length) {
+      const note = document.createElement('p');
+      note.className = 'pane-note';
+      note.textContent = 'Não há outra estante. Vincule uma pasta na barra lateral.';
+      list.appendChild(note);
+      return;
+    }
+    for (const shelf of others) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = shelf.name;
+      btn.addEventListener('click', () => {
+        const { book, shelf: from } = selected || {};
+        if (book) moveBook(book, from, shelf);
+      });
+      list.appendChild(btn);
+    }
+    list.querySelector('button').focus();
+  }
+
+  function openRename() {
+    if (!selected) return;
+    byId('bookMoveList').hidden = true;
+    byId('btnBookMove').setAttribute('aria-expanded', 'false');
+    const form = byId('bookRenameForm');
+    const input = byId('bookRenameInput');
+    form.hidden = false;
+    input.value = selected.book.name;
+    input.focus();
+    const dot = input.value.lastIndexOf('.');
+    input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
+  }
+
+  function submitRename(e) {
+    e.preventDefault();
+    if (!selected) return;
+    const { book, shelf } = selected;
+    renameBook(book, shelf, byId('bookRenameInput').value);
+  }
+
+  function armReserve() {
+    if (!selected) return;
+    const btn = byId('btnBookReserve');
+    if (!btn.classList.contains('armed')) {
+      btn.classList.add('armed');
+      btn.textContent = 'Clique de novo para mandar';
+      reserveArmTimer = setTimeout(disarmReserve, 4000);
+      return;
+    }
+    disarmReserve();
+    const { book, shelf } = selected;
+    reserveBook(book, shelf);
+  }
+
+  // Right-click menu on a book.
+  let menuHit = null;
+
+  function openMenu(hit, e) {
+    menuHit = hit;
+    hideCard();
+    const menu = byId('bookMenu');
+    const stage = byId('libraryStage');
+    const box = stage.getBoundingClientRect();
+    menu.hidden = false;
+    const left = Math.max(8, Math.min(stage.clientWidth - menu.offsetWidth - 8, e.clientX - box.left));
+    const top = Math.max(8, Math.min(stage.clientHeight - menu.offsetHeight - 8, e.clientY - box.top));
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+    menu.querySelector('button').focus();
+  }
+
+  function closeMenu() {
+    const menu = byId('bookMenu');
+    if (menu && !menu.hidden) menu.hidden = true;
+  }
+
+  function onContextMenu(e) {
+    const hit = hitBook(worldPoint(e));
+    if (!hit) return;
+    e.preventDefault();
+    bookDrag = null;
+    openMenu(hit, e);
+  }
+
+  function onMenuAction(act) {
+    const hit = menuHit;
+    closeMenu();
+    if (!hit) return;
+    if (act === 'reserve') { reserveBook(hit.book, hit.shelf); return; }
+    showCard(hit);
+    if (act === 'rename') openRename();
+    else if (act === 'move') toggleMoveList();
+    else if (act === 'read') askToRead();
+  }
+
+  function onMenuKey(e) {
+    const items = [...byId('bookMenu').querySelectorAll('button')];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); closeMenu(); canvas.focus(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
   }
 
   // ---------- Painel de seções (barra lateral) ----------
@@ -1106,8 +1480,10 @@
     byId('libraryView').hidden = false;
     resize();
     setLabel(her.label);
+    updateCallButton();
     await Promise.all([loadAtlas(), loadSections()]);
     if (!isOpen) return;
+    await reportHall(document.visibilityState === 'visible');
     await poll();
     lastTime = 0;
     if (!rafId) rafId = requestAnimationFrame(frame);
@@ -1123,6 +1499,7 @@
     byId('bookTip').hidden = true;
     if (rafId) cancelAnimationFrame(rafId);
     rafId = 0;
+    reportHall(false);
   }
 
   function notifyActivity() {
@@ -1137,12 +1514,28 @@
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointerup', onUp);
-    canvas.addEventListener('pointerleave', () => { hover = null; drag = null; pointer = null; byId('bookTip').hidden = true; });
+    canvas.addEventListener('pointerleave', () => {
+      hover = null; drag = null; pointer = null; byId('bookTip').hidden = true;
+      if (bookDrag && !bookDrag.moved) bookDrag = null;
+    });
+    canvas.addEventListener('pointercancel', () => { bookDrag = null; drag = null; });
     canvas.addEventListener('wheel', onWheel, { passive: false });
     canvas.addEventListener('keydown', onKey);
     if (window.ResizeObserver) new ResizeObserver(() => { if (isOpen) resize(); }).observe(byId('libraryStage'));
     else window.addEventListener('resize', () => { if (isOpen) resize(); });
     byId('btnBookRead').addEventListener('click', askToRead);
+    byId('btnBookMove').addEventListener('click', toggleMoveList);
+    byId('btnBookRename').addEventListener('click', openRename);
+    byId('btnBookReserve').addEventListener('click', armReserve);
+    byId('bookRenameForm').addEventListener('submit', submitRename);
+    byId('bookRenameInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); byId('bookRenameForm').hidden = true; byId('btnBookRename').focus(); }
+    });
+    canvas.addEventListener('contextmenu', onContextMenu);
+    const menu = byId('bookMenu');
+    menu.addEventListener('click', (e) => { const b = e.target.closest('button[data-act]'); if (b) onMenuAction(b.dataset.act); });
+    menu.addEventListener('keydown', onMenuKey);
+    document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
     byId('btnBookClose').addEventListener('click', hideCard);
     byId('bookCard').addEventListener('keydown', (e) => { if (e.key === 'Escape') { hideCard(); canvas.focus(); } });
     byId('btnHallAdd').addEventListener('click', () => toggleAddForm(byId('hallAddForm').hidden));
@@ -1151,6 +1544,11 @@
     byId('hallAddForm').addEventListener('submit', addSection);
     byId('btnLibraryEmptyAdd').addEventListener('click', () => toggleAddForm(true));
     byId('btnLibrarySidebar').addEventListener('click', () => byId('btnExpandSidebar').click());
+    byId('btnLibraryCall').addEventListener('click', () => presencePost({ enter: true }));
+    // The big window hidden (closed to the tray) with the hall open: she goes home.
+    document.addEventListener('visibilitychange', () => {
+      if (isOpen) reportHall(document.visibilityState === 'visible');
+    });
     // Cheap polling: often while open, now and then for the tab's counter.
     pollTimer = setInterval(() => {
       if (document.visibilityState !== 'visible') return;

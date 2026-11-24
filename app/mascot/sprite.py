@@ -147,3 +147,36 @@ def _with_zzz(img: Image.Image, anchor: Tuple[float, float], height: int,
         d.text((x, y), "z", font=_font(size), fill=(236, 226, 205, alpha),
                stroke_width=max(1, size // 9), stroke_fill=(40, 30, 40, alpha))
     return canvas, (anchor[0], anchor[1] + pad_top)
+
+
+# ----------------- The little door to the Biblioteca -----------------
+DOOR_COLORS = {"frame": "#3e2718", "wood": "#7a5236", "dark": "#5a3b26", "brass": "#c9a55a",
+               "inside": "#1c140f", "glow": "#6b4a2a"}
+DOOR_GRID = (16, 24)        # drawn on a small grid, scaled up with hard edges
+
+
+@lru_cache(maxsize=32)
+def door_image(frame: int, height: int) -> Image.Image:
+    """Pixel-art door in the hall's woods: 0 closed, 1 ajar, 2 open.
+
+    Its height is three quarters of hers; transparent around it."""
+    gw, gh = DOOR_GRID
+    c = DOOR_COLORS
+    img = Image.new("RGBA", (gw, gh), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rectangle((1, 0, gw - 2, gh - 1), fill=c["frame"])          # frame
+    d.rectangle((3, 2, gw - 4, gh - 1), fill=c["inside"])         # doorway
+    d.rectangle((4, gh - 5, gw - 5, gh - 1), fill=c["glow"])      # lamplight on the floor inside
+    frame = max(0, min(2, int(frame)))
+    leaf = {0: gw - 6, 1: 6, 2: 2}[frame]                         # width of the door leaf
+    x0, x1 = 3, 3 + leaf - 1
+    d.rectangle((x0, 2, x1, gh - 1), fill=c["wood"])
+    if leaf >= 6:
+        d.rectangle((x0 + 1, 4, x1 - 1, 10), outline=c["dark"])
+        d.rectangle((x0 + 1, 13, x1 - 1, gh - 3), outline=c["dark"])
+        d.point((x1 - 1, 12), fill=c["brass"])                      # knob
+    else:
+        d.line((x1, 2, x1, gh - 1), fill=c["dark"])
+    h = max(4, round(0.75 * height))
+    w = max(3, round(h * gw / gh))
+    return img.resize((w, h), Image.NEAREST)

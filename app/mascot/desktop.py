@@ -59,6 +59,11 @@ MINI_SIZE = (380, 540)     # logical size of the small chat window (launcher.MIN
 
 MENU_OPEN, MENU_STAY, MENU_SILENCE, MENU_DND, MENU_HIDE, MENU_QUIT = 1, 2, 3, 4, 5, 6
 MENU_MINI = 7
+MENU_LIBRARY = 8
+PRESENCE_EVERY = 1.0       # seconds between presence checks (door timeouts, return home)
+LEAVE_WAIT = 3.0           # held, falling or climbing: she goes anyway after this long
+LIBRARY_NOTE = "Fui à Biblioteca cuidar dos seus livros."
+LIBRARY_NOTE_SECONDS = 10.0
 
 
 def double_click_seconds() -> float:
@@ -97,7 +102,8 @@ class DesktopMascot:
                  window_box_fn: Optional[Callable[[int], Optional[WindowBox]]] = None,
                  clock: Callable[[], float] = time.monotonic,
                  rng: Optional[random.Random] = None,
-                 click_wait: Optional[float] = None):
+                 click_wait: Optional[float] = None,
+                 presence: Any = None):
         if None in (window_factory, area_fn, cursor_fn, windows_fn, window_box_fn):
             from app.mascot import win32
             window_factory = window_factory or win32.LayeredWindow
@@ -113,10 +119,13 @@ class DesktopMascot:
             prefs_saver = prefs_saver or preferences.update
         if life is None:
             from app.life.service import life_service as life
+        if presence is None:
+            from app.library.presence import presence
         self.bridge = bridge
         self.prefs_loader = prefs_loader
         self.prefs_saver = prefs_saver
         self.life = life
+        self.presence = presence
         self.area_fn = area_fn
         self.cursor_fn = cursor_fn
         self.foreground_fn = foreground_fn
@@ -145,6 +154,11 @@ class DesktopMascot:
         self._windows: List[WindowBox] = []
         self._next_windows = 0.0
         self._balloon_cache: Dict[tuple, Tuple[Image.Image, Dict[str, tuple]]] = {}
+        self._next_presence = 0.0
+        self._announce = False
+        self._leave_asked: Optional[float] = None
+        self._told_away = False
+        self._return_pending = False
         self._load_prefs()
 
     # ----------------- Lifecycle and cross-thread API -----------------
@@ -184,6 +198,7 @@ class DesktopMascot:
         if now >= self._next_fullscreen:
             self.fullscreen_hidden = self._fullscreen_in_front()
             self._next_fullscreen = now + FULLSCREEN_EVERY
+        self._library_tick(now)
         show = self.enabled and not self.fullscreen_hidden
         if not show:
             self.window.set_visible(False)
@@ -262,7 +277,7 @@ class DesktopMascot:
 
     def _ev_dblclick(self, x: int, y: int) -> None:
         target = self._hit(x, y)
-        if target and target[0] == "sprite":
+        if target and target[0] == "sprite" and not self.brain.hidden:
             self._pending_click = None
             self._open_chat()
 
@@ -313,6 +328,10 @@ class DesktopMascot:
                 self._set_pref("mascot_enabled", False)
             elif payload == "close-mini":
                 self._bridge("hide_mini_chat")
+            elif payload in ("enter-library", "enter-library-announce"):
+                self._go_to_library(payload == "enter-library-announce", now)
+            elif payload == "return-from-library":
+                self._return_pending = True
 
     def _say(self, event: Dict[str, Any], now: float) -> None:
         text = str(event.get("text") or "").strip()
@@ -350,6 +369,57 @@ class DesktopMascot:
         self.shown = Shown(Bubble(text=text), "note", now + seconds)
         self._last_frame = None
 
+    # ----------------- The Biblioteca (app/library/presence) -----------------
+    def _go_to_library(self, announce: bool, now: float) -> None:
+        self._announce = announce
+        self._return_pending = False
+        if self.brain.is_away:
+            return
+        self._told_away = False
+        if self.on_screen and self.brain.placed:
+            self._leave_asked = now
+            self.brain.go_away(now)
+        else:
+            self.brain.vanish(now)        # nobody could see her walk to the door
+
+    def _library_tick(self, now: float) -> None:
+        brain = self.brain
+        stuck = brain.mode in ("held", "air", "climb")
+        if brain.leaving and stuck and self._leave_asked is not None and now - self._leave_asked > LEAVE_WAIT:
+            if self._dragging:
+                self._dragging = False
+                self._press = None
+                self.window.hide_cursor(False)
+            brain.vanish(now)
+        if brain.is_away and not self._told_away:
+            self._told_away = True
+            self._leave_asked = None
+            self._call_presence("mascot_left")
+            if self._announce:
+                self._announce = False
+                self._library_note(now)
+        if now >= self._next_presence:
+            self._next_presence = now + PRESENCE_EVERY
+            self._call_presence("tick")
+
+    def _call_presence(self, name: str, *args) -> None:
+        fn = getattr(self.presence, name, None)
+        if fn:
+            try:
+                fn(*args)
+            except Exception:
+                logger.exception("Mascote: presença %s", name)
+
+    def _library_note(self, now: float) -> None:
+        bubble = Bubble(text=LIBRARY_NOTE, tag="biblioteca", buttons=(Button("watch", "Assistir", True),))
+        self.shown = Shown(bubble, "library", now + LIBRARY_NOTE_SECONDS)
+        self._last_frame = None
+
+    def _ask_library(self) -> None:
+        """Menu: she goes to the Biblioteca and the big window opens there."""
+        self._call_presence("enter", "menu")
+        self._bridge("open_library")
+
     # ----------------- Actions -----------------
     def _button(self, ident: str) -> None:
         shown = self.shown
@@ -364,12 +434,17 @@ class DesktopMascot:
         elif ident == "silence":
             self.shown = None
             self._silence()
+        elif ident == "watch":
+            self.shown = None
+            self._bridge("open_library")
         self._last_frame = None
 
     def _open_chat(self) -> None:
         self._bridge("open_chat")
 
     def _toggle_mini(self) -> None:
+        if self.brain.is_away or self.brain.hidden:
+            return
         x, y = self._mini_spot()
         self._bridge("toggle_mini_chat", x, y)
 
@@ -424,6 +499,7 @@ class DesktopMascot:
         items = menu_items([
             (MENU_OPEN, "Abrir a conversa", False, True),
             (MENU_MINI, "Conversa rápida", False, True),
+            (MENU_LIBRARY, "Ir para a Biblioteca", False, True),
             (MENU_STAY, "Ficar parada aqui", not walk, True),
             (MENU_SILENCE, "Voltar a falar" if silenced else "Silêncio por 2 horas", False, True),
             (MENU_DND, "Não perturbar", dnd, True),
@@ -436,6 +512,8 @@ class DesktopMascot:
             self._open_chat()
         elif chosen == MENU_MINI:
             self._toggle_mini()
+        elif chosen == MENU_LIBRARY:
+            self._ask_library()
         elif chosen == MENU_STAY:
             self._set_pref("mascot_walk", not walk)
         elif chosen == MENU_SILENCE:
@@ -503,6 +581,11 @@ class DesktopMascot:
 
     def _frame(self, now: float, dt: float) -> None:
         world, dpi, size_px = self._world(now)
+        if self._return_pending:
+            self._return_pending = False
+            if self.brain.is_away or self.brain.leaving or self.brain.mode == "door_in":
+                self.brain.come_back(now, world)
+            self._told_away = False
         if not self.brain.placed:
             self.brain.place(world, now)
         if self.shown and now >= self.shown.until and not (self.hover or self._press):
@@ -510,21 +593,45 @@ class DesktopMascot:
             self._last_frame = None
         self.brain.step(dt, now, world, walk=bool(self.prefs.get("mascot_walk", True)),
                         climb=bool(self.prefs.get("mascot_climb", True)), busy=self.shown is not None)
+        hidden = self.brain.hidden
+        if hidden and not self.shown and not self.brain.door:
+            if self.window.visible or self.on_screen:
+                self.window.set_visible(False)
+            self.on_screen = False
+            self._last_frame = None
+            return
         look = self.brain.look(now)
         img, (ax, ay) = sprite.render(look, size_px)
+        if hidden:
+            img = Image.new("RGBA", img.size, (0, 0, 0, 0))     # keeps the balloon's anchor
         shake = wobble(now) * self.brain.scale if self.brain.app_state == "erro" and self.brain.is_resting() else 0
         sx = round(self.brain.x - ax + shake)
         sy = round(self.brain.y - ay)
-        key = (look, sx, sy, id(self.shown), self.hover, size_px)
+        door = self.brain.door
+        key = (look, sx, sy, id(self.shown), self.hover, size_px, door, hidden)
         if key == self._last_frame and self.window.visible:
             return
         self._last_frame = key
-        canvas, ox, oy = self._compose(img, sx, sy, world.area, dpi, size_px)
+        under = None
+        if door:
+            dimg = sprite.door_image(door[2], size_px)
+            under = (dimg, round(door[0] - dimg.width / 2), round(door[1] - dimg.height))
+        canvas, ox, oy = self._compose(img, sx, sy, world.area, dpi, size_px, under)
         self.window.update(canvas, ox, oy)
         self.on_screen = True
 
     def _compose(self, img: Image.Image, sx: int, sy: int, area: Area, dpi: float,
-                 size_px: int) -> Tuple[Image.Image, int, int]:
+                 size_px: int, under: Optional[Tuple[Image.Image, int, int]] = None
+                 ) -> Tuple[Image.Image, int, int]:
+        if under:
+            # The little door goes behind her: one canvas holding both.
+            dimg, dx, dy = under
+            x0, y0 = min(sx, dx), min(sy, dy)
+            x1, y1 = max(sx + img.width, dx + dimg.width), max(sy + img.height, dy + dimg.height)
+            both = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+            both.alpha_composite(dimg, (dx - x0, dy - y0))
+            both.alpha_composite(img, (sx - x0, sy - y0))
+            img, sx, sy = both, x0, y0
         if not self.shown:
             self._layout = {"sprite": (0, 0, img), "balloon": None}
             return img, sx, sy
