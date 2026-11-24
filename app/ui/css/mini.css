@@ -1,0 +1,35 @@
+/* Conversa rápida (mini.html): a janelinha ao lado da Victorique da área de trabalho.
+   Usa os tokens e os estilos de mensagem de style.css. */
+.mini-app { display: flex; flex-direction: column; height: 100vh; }
+
+.mini-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 14px; flex: none;
+  border-bottom: 1px solid var(--border); background: var(--bg-sidebar);
+}
+.mini-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex: none; }
+.mini-title { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
+.mini-title strong { font-family: var(--font-serif); font-size: 1.02em; font-weight: 600; }
+.mini-title small { color: var(--muted); font-size: 0.78em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.mini-thread { flex: 1; overflow-y: auto; padding: 16px 14px 8px; }
+.mini-empty {
+  margin: 30% 12px 0; text-align: center; color: var(--muted);
+  font-family: var(--font-serif); font-style: italic; font-size: 1.02em;
+}
+.mini .messages-list { gap: 16px; }
+.mini .message.assistant { gap: 0; }
+.mini .message.user .message-bubble { max-width: 88%; }
+.mini .message-bubble { font-size: 0.95em; }
+.mini .message-bubble pre { font-size: 0.85em; }
+.mini .thought-box .reasoning-body { max-height: 220px; }
+
+.mini-auth {
+  display: flex; align-items: center; gap: 8px; margin: 0 12px 6px; padding: 8px 10px; flex: none;
+  border-radius: 10px; font-size: 0.82em; color: var(--text-2);
+  border: 1px solid rgba(217, 164, 65, 0.45); background: rgba(217, 164, 65, 0.08);
+}
+.mini-auth .ic { color: var(--warning); }
+.mini-auth span { flex: 1; }
+
+.mini-composer { margin: 0 10px 10px; padding: 10px 10px 6px 14px; flex: none; }
+.mini-composer textarea { max-height: 140px; }

@@ -1,0 +1,27 @@
+fastapi>=0.115.0
+uvicorn>=0.32.0
+pydantic>=2.10.0
+httpx>=0.28.0
+pywebview>=5.3.0
+pypdf>=5.1.0
+pypdfium2>=5.0.0
+pytesseract>=0.3.13
+Pillow>=11.0.0
+numpy>=2.1.0
+python-multipart>=0.0.20
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+
+# Modo Claude Code (traz o Claude Code empacotado; ~170 MB)
+claude-agent-sdk==0.2.187
+
+# Voz (TTS/STT) - instalados e funcionando neste ambiente
+pyttsx3>=2.99
+SpeechRecognition>=3.17.0
+
+# llama.cpp (backend alternativo de modelos GGUF) e áudio de microfone.
+# Não há wheels pré-compiladas para Python 3.15 neste ambiente; instale
+# manualmente quando disponível:
+#   pip install llama-cpp-python pyaudio
+# llama-cpp-python>=0.3.0
+# pyaudio>=0.2.14
