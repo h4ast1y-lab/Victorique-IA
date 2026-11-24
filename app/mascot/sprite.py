@@ -5,7 +5,8 @@ The frames come from the sprite sheets in assets/source/, packed by
 scripts/build_mascot_sprites.py into assets/victorique.webp plus
 assets/victorique.json. Every frame has an anchor: the point that sits on her
 position (the soles for most poses, the seat when she sits on a window edge,
-the drawn cursor's tip while she is dragged, the screen edge when she peeks).
+her hand while she is dragged (under the real cursor), the screen edge when
+she peeks).
 
 `render(look, height)` gives the RGBA image at a given standing height and
 where its anchor is, mirrored when the drawing faces the other way.
@@ -25,8 +26,9 @@ ASSETS = Path(__file__).resolve().parent / "assets"
 ATLAS_IMAGE = ASSETS / "victorique.webp"
 ATLAS_DATA = ASSETS / "victorique.json"
 
-# Never mirrored: the dragged frames carry a drawn arrow cursor.
-NO_MIRROR = {"held"}
+# Animations never mirrored. The dragged frames used to carry a drawn arrow
+# cursor; it is erased when the atlas is built, so she can hang on either side.
+NO_MIRROR: set = set()
 EFFECTS = ("zzz",)
 
 

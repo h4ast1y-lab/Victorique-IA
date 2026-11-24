@@ -14,7 +14,8 @@ UI = Path(__file__).resolve().parent.parent / "app" / "ui"
 async def test_engine_routes_claude_code(monkeypatch):
     calls = []
 
-    async def fake_run_turn(conversation_id, user_message, project_id, personality_id, deep_thinking=False):
+    async def fake_run_turn(conversation_id, user_message, project_id, personality_id, deep_thinking=False,
+                            attachments=None):
         calls.append((conversation_id, user_message, project_id, personality_id, deep_thinking))
         yield 'data: {"type": "token", "content": "Oi"}\n\n'
         yield 'data: {"type": "done", "content": "Oi"}\n\n'

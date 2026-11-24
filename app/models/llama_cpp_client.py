@@ -118,7 +118,8 @@ class LlamaCppClient:
         prompt_parts.append("Assistant:")
         prompt = "\n".join(prompt_parts)
 
-        n_ctx = num_ctx or self._n_ctx
+        # num_ctx is fixed when the model loads (self._n_ctx); llama-cpp-python
+        # cannot change it per request.
         try:
             # llama-cpp-python é síncrono; executamos em thread para não
             # bloquear o event loop do FastAPI.

@@ -60,10 +60,12 @@ async def test_buscar_documentos_cites_title_and_page(monkeypatch):
     assert "O reajuste é anual." in text
 
 
-def test_server_exposes_two_tools():
+def test_server_preapproves_only_the_read_tools():
     server = create_victorique_server(None)
     assert server["name"] == "victorique"
+    # Reading is free; organizing and editing always go through the bridge.
     assert VICTORIQUE_TOOL_NAMES == [
         "mcp__victorique__buscar_memorias",
         "mcp__victorique__buscar_documentos",
+        "mcp__victorique__ler_documento",
     ]

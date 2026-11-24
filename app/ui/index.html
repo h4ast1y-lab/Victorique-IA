@@ -222,13 +222,16 @@
           </div>
 
           <form class="composer" id="chatForm">
+            <div class="attach-tray" id="attachTray" hidden aria-label="Anexos da mensagem"></div>
             <textarea id="chatInput" placeholder="Pergunte qualquer coisa à Victorique" rows="1" aria-label="Mensagem"></textarea>
+            <div class="drop-hint" id="dropHint" hidden>Solte aqui para anexar à mensagem</div>
             <div class="composer-bar">
               <div class="composer-left">
-                <button type="button" class="icon-btn" id="btnAttachDoc" title="Anexar documento à biblioteca (PDF, TXT, MD)" aria-label="Anexar documento">
+                <button type="button" class="icon-btn" id="btnAttachChat" title="Anexar imagens ou documentos à mensagem (ficam só nesta conversa; também dá para colar ou arrastar)" aria-label="Anexar à mensagem">
                   <svg class="ic"><use href="#i-clip"/></svg>
                 </button>
-                <input type="file" id="fileInput" accept=".pdf,.txt,.md" hidden>
+                <input type="file" id="chatFileInput" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,.png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.docx,.xlsx,.xlsm,.xls,.pptx,.csv,.tsv,.epub,.txt,.md,.json,.xml,.html,.yaml,.yml,.log,.py,.js,.ts,.css,.ini,.toml,.sql" hidden>
+                <input type="file" id="fileInput" accept=".pdf,.txt,.md,.docx,.epub,.xlsx,.xlsm,.xls,.pptx,.csv,.tsv" hidden>
                 <div class="menu-anchor">
                   <button type="button" class="pill-btn" id="btnProfileMenu" title="Perfil da assistente" aria-haspopup="true">
                     <span class="pill-avatar" id="profilePillAvatar">V</span>
@@ -757,6 +760,14 @@
   </div>
 
   <!-- Project Modal -->
+  <div class="lightbox" id="imageLightbox" hidden role="dialog" aria-label="Imagem anexada">
+    <img id="lightboxImg" alt="">
+    <div class="lightbox-caption" id="lightboxCaption"></div>
+    <button type="button" class="icon-btn lightbox-close" id="btnCloseLightbox" title="Fechar" aria-label="Fechar">
+      <svg class="ic"><use href="#i-x"/></svg>
+    </button>
+  </div>
+
   <div class="modal-backdrop" id="projectModal" hidden>
     <div class="modal">
       <div class="modal-header">

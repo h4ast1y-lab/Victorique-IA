@@ -47,6 +47,21 @@ DOOR_GAP = 0.35                 # the door stands this many heights beyond her
 TURN_STEP = 0.09
 WALK_FRAMES = 6
 
+# Dragged by the hand. Speeds are in her heights per second, so they feel the
+# same at any size. The pose follows the hand: still hand, still pose.
+DRAG_SMOOTH = 0.08              # s: smoothing of the velocity of the hand
+DRAG_STILL = 0.12               # s without a mouse move = the hand stopped
+DRAG_TURN = 1.0                 # sideways pull needed to swing her to the other side
+DRAG_FAST = 3.5                 # above this she flies out behind the hand
+DRAG_STEP = 0.32                # heights of hand travel per animation frame
+DRAG_SETTLE = 0.13              # s per frame while she swings back under the hand
+SHAKE_TURNS = 4                 # this many side swaps ...
+SHAKE_WINDOW = 2.0              # ... within this many seconds: she was shaken
+HELD_LEAN = (2, 3)
+HELD_FLY = (4, 5, 6, 7, 8, 7, 6, 5)
+HELD_SETTLE_FLY = (8, 9, 10, 11)
+HELD_SETTLE_LEAN = (3, 2, 0)
+
 Step = Tuple[str, int, float]    # animation, frame, seconds
 
 
@@ -57,12 +72,20 @@ def seq(anim: str, frames, fps: float) -> List[Step]:
 # The turn sheet goes from facing right (0) through the front (2) to left (4).
 TURN_TO = {1: [2, 1, 0], -1: [2, 3, 4]}
 
-# Idle face for each model expression: (animation, frame).
+# Idle face for each model expression: (animation, frame, frame while blinking).
 EXPRESSION_FRAMES = {
-    "neutral": ("blink", 0), "skeptical": ("glance", 4), "annoyed": ("moods", 3),
-    "concerned": ("moods", 2), "happy": ("blink", 4), "surprised": ("talk", 2),
-    "embarrassed": ("moods", 4), "focused": ("think", 2), "sleepy": ("doze", 0),
-    "deduction": ("think", 4),
+    "neutral": ("blink", 0, 3), "skeptical": ("glance", 4, 4), "annoyed": ("sigh", 6, 5),
+    "concerned": ("moods", 2, 2), "happy": ("happy", 2, 3), "surprised": ("surprised", 4, 4),
+    "embarrassed": ("moods", 4, 4), "focused": ("think", 2, 2), "sleepy": ("doze", 0, 0),
+    "deduction": ("point", 5, 5), "confused": ("confused", 4, 4),
+}
+# How an expression starts (frames, seconds each) before its idle face.
+EXPRESSION_INTROS = {
+    "annoyed": ((1, 3, 4), 0.35),
+    "happy": ((1, 2, 4, 5, 4), 0.22),
+    "surprised": ((1, 2, 3), 0.15),
+    "deduction": ((2, 3, 4), 0.3),
+    "confused": ((1, 2, 3), 0.3),
 }
 
 
@@ -72,7 +95,7 @@ def gesture_steps(gesture: str) -> List[Step]:
     if gesture == "pipe":
         return seq("think", [1, 2, 2, 3, 3, 2, 5], 2.2)
     if gesture == "deduction":
-        return seq("think", [1, 2, 4, 4, 4, 5], 2.5)
+        return seq("think", [1, 2, 2], 2.5) + seq("point", [3, 4, 4, 5, 5], 2.5)
     if gesture == "tea":
         return seq("tea", range(12), 4.0)
     if gesture == "hair-adjust":
@@ -83,6 +106,10 @@ def gesture_steps(gesture: str) -> List[Step]:
 PEEK_STEPS = seq("peek", [8, 1, 2, 3, 3, 4, 5, 6, 6, 7, 6, 5, 3, 2, 1, 8], 2.6)
 HARD_LAND_STEPS = [("fall", 3, 0.3), ("fall", 4, 0.55), ("fall", 5, 0.25), ("fall", 6, 0.2), ("fall", 7, 0.15)]
 SOFT_LAND_STEPS = [("jump", 7, 0.2)]
+TANTRUM_STEPS = seq("tantrum", [0, 1, 2, 3, 4, 5, 6, 2, 3, 4, 5, 6, 7], 9.0) + [("tantrum", 7, 0.6)]
+WAKE_STEPS = seq("wake", range(8), 3.2)
+YAWN_STEPS = seq("wake", [0, 1, 2, 2, 3, 4, 6], 3.0)
+SIGH_STEPS = seq("sigh", [1, 2, 3, 3, 4, 5, 6, 7, 7, 6, 1], 3.0)
 
 
 class Brain:
@@ -128,6 +155,15 @@ class Brain:
         self.away_spot: Optional[Tuple[float, str, int]] = None  # x, surface, side
         self._door_x = 0.0
         self._door_from = 0.0
+        # Dragged by the hand (see grab / drag_to / _held_look).
+        self.drag_t: Optional[float] = None    # time of the last mouse move
+        self.drag_vx = 0.0
+        self.drag_vy = 0.0
+        self.drag_speed = 0.0                  # heights per second
+        self.drag_phase = 0.0                  # grows with the travel of the hand
+        self.drag_peak = 0.0                   # fastest pull since the hand last stopped
+        self.drag_turns: List[float] = []
+        self.shaken = False
 
     @property
     def scale(self) -> float:
@@ -175,18 +211,58 @@ class Brain:
         self.ride_ref = None
         self._set_mode("held", now)
         self.set_expression("surprised", now, hold=0.8)
+        self.drag_t = None
+        self.drag_vx = self.drag_vy = self.drag_speed = 0.0
+        self.drag_phase = self.drag_peak = 0.0
+        self.drag_turns = []
+        self.shaken = False
 
-    def drag_to(self, x: float, y: float) -> None:
-        if self.mode == "held":
-            self.x, self.y = float(x), float(y)
+    def drag_to(self, x: float, y: float, now: Optional[float] = None) -> None:
+        """The hand moved to (x, y): her anchor (her hand) follows it.
+
+        The first call after `grab` only puts her hand under the cursor. Later
+        calls measure the pull: its speed picks the pose and its sideways
+        direction the side she hangs on (pulled right, she trails on the left
+        of the hand; pulled left, on the right)."""
+        if self.mode != "held":
+            return
+        now = self.now if now is None else now
+        x, y = float(x), float(y)
+        if self.drag_t is None:
+            self.x, self.y, self.drag_t = x, y, now
+            return
+        dx, dy = x - self.x, y - self.y
+        self.x, self.y = x, y
+        dist = math.hypot(dx, dy)
+        if dist == 0:
+            return
+        h = max(1.0, self.height)
+        dt = max(now - self.drag_t, 1.0 / 120)
+        if now - self.drag_t > DRAG_STILL:      # it had stopped: start from rest
+            self.drag_vx = self.drag_vy = 0.0
+            self.drag_peak = 0.0
+        k = min(1.0, dt / DRAG_SMOOTH)
+        self.drag_vx += (dx / dt / h - self.drag_vx) * k
+        self.drag_vy += (dy / dt / h - self.drag_vy) * k
+        self.drag_speed = math.hypot(self.drag_vx, self.drag_vy)
+        self.drag_peak = max(self.drag_peak, self.drag_speed)
+        self.drag_phase += dist / (DRAG_STEP * h)
+        self.drag_t = now
+        if abs(self.drag_vx) >= DRAG_TURN:
+            side = 1 if self.drag_vx > 0 else -1
+            if side != self.facing:
+                self.facing = side
+                self.drag_turns = [t for t in self.drag_turns if now - t <= SHAKE_WINDOW] + [now]
+                if len(self.drag_turns) >= SHAKE_TURNS:
+                    self.shaken = True
 
     def release(self, now: float, vx: float = 0.0, vy: float = 0.0) -> None:
         if self.mode != "held":
             return
         limit = 1800.0 * self.scale
-        # Dragged, her anchor is the drawn cursor's tip at her hand; falling,
-        # it is her soles again (about half her height lower, a bit left).
-        self.x -= self.height * 0.3
+        # Dragged, her anchor is her hand under the cursor; falling, it is her
+        # soles again: about half her height lower, on the side she trails.
+        self.x -= self.height * 0.3 * self.facing
         self.y += self.height * 0.5
         self.vx = max(-limit, min(limit, vx))
         self.vy = max(-limit, min(limit, vy))
@@ -247,9 +323,9 @@ class Brain:
         if state == "dormindo":
             self._doze_off(now)
             return
-        if self.mode == "sleep":            # woke up
-            self.set_expression("sleepy", now, hold=4.0)
-            self._stand_up(now)
+        if self.mode == "sleep":            # woke up: stands, yawns, rubs her eyes
+            self._play(seq("stand_up", range(6), 8.0) + WAKE_STEPS, now, "stand_up",
+                       lambda t: self._idle(t, 2.0, 5.0))
             return
 
         if busy:
@@ -349,12 +425,16 @@ class Brain:
         self.surface_key = surface.key
         self.ride_ref = surface.wall_left if surface.kind == "window" else None
         self.vx = self.vy = 0.0
-        if hard:
-            self.set_expression("annoyed", now, hold=4.0)
+        shaken, self.shaken = self.shaken, False
+        if hard or shaken:
+            self.set_expression("annoyed", now, hold=6.0 if shaken else 4.0)
         elif self.air_style == "drop":
             self.expression_until = min(self.expression_until, now + 1.5)
-        self._play(HARD_LAND_STEPS if hard else SOFT_LAND_STEPS, now, "land",
-                   lambda t: self._idle(t, 2.0, 5.0))
+        steps = list(HARD_LAND_STEPS if hard else SOFT_LAND_STEPS)
+        if shaken:
+            # Shaken about: once on her feet, she stamps them.
+            steps += TANTRUM_STEPS
+        self._play(steps, now, "land", lambda t: self._idle(t, 2.0, 5.0))
 
     # ----------------- Climbing and jumping -----------------
     def _climb(self, dt: float, now: float, world: World) -> None:
@@ -648,7 +728,8 @@ class Brain:
         lo, hi = self._walk_range(here)
         climbs = self._climb_options(world, here) if walk and climb else []
         jumps = self._jump_options(world, here) if walk and climb else []
-        options: List[Tuple[str, float]] = [("rest", 10), ("read", 8), ("tea", 6), ("glance", 6)]
+        options: List[Tuple[str, float]] = [("rest", 10), ("read", 8), ("tea", 6), ("glance", 6),
+                                            ("yawn", 2), ("sigh", 2)]
         options.append(("edge", 16) if on_window else ("sit", 12))
         if walk and hi > lo:
             options.append(("walk", 40))
@@ -704,6 +785,10 @@ class Brain:
             self._play(steps, now, "act", lambda t: self._idle(t, 2.0, 6.0))
         elif choice == "glance":
             self._play(seq("glance", range(6), 3.0), now, "act", lambda t: self._idle(t, 2.0, 6.0))
+        elif choice == "yawn":
+            self._play(YAWN_STEPS, now, "act", lambda t: self._idle(t, 2.0, 6.0))
+        elif choice == "sigh":
+            self._play(SIGH_STEPS, now, "act", lambda t: self._idle(t, 2.0, 6.0))
         else:
             self.until = now + rng.uniform(4.0, 12.0)
 
@@ -774,8 +859,7 @@ class Brain:
         if mode == "walk":
             return Look("walk", int(self.walk_phase) % WALK_FRAMES, facing)
         if mode == "held":
-            frame = int(t * 8) if t < 0.5 else 4 + int((t - 0.5) * 8) % 8
-            return Look("held", min(frame, 11), facing)
+            return self._held_look(now)
         if mode == "air":
             if self.air_style == "jump":
                 v = self.vy / max(1.0, self.scale)
@@ -794,6 +878,23 @@ class Brain:
             return Look("edge", int(now * 3) % 12, facing)
         return self._face(now)
 
+    def _held_look(self, now: float) -> Look:
+        """Dragged: the pose follows the hand. It changes only when the mouse
+        moves; when the hand stops she swings back under it and stays still."""
+        facing = self.facing
+        if self.drag_t is None or self.drag_phase == 0.0:
+            # Picked up, the hand has not moved yet: a startled look, then calm.
+            return Look("held", 1 if now - self.mode_t0 < 0.5 else 0, facing)
+        still = now - self.drag_t
+        if still < DRAG_STILL:
+            step = int(self.drag_phase)
+            if self.drag_speed >= DRAG_FAST:
+                return Look("held", HELD_FLY[step % len(HELD_FLY)], facing)
+            return Look("held", HELD_LEAN[step % len(HELD_LEAN)], facing)
+        settle = HELD_SETTLE_FLY if self.drag_peak >= DRAG_FAST else HELD_SETTLE_LEAN
+        i = min(len(settle) - 1, int((still - DRAG_STILL) / DRAG_SETTLE))
+        return Look("held", settle[i], facing)
+
     def _face(self, now: float) -> Look:
         state = self.app_state
         expression = self.expression if now < self.expression_until else "neutral"
@@ -802,13 +903,17 @@ class Brain:
             frames = (1, 2, 3, 4, 1, 4)
             return Look("talk", frames[int(now / TALK_STEP) % len(frames)], self.facing)
         if expression != "neutral":
-            if expression == "annoyed" and now - self.expression_t0 < 1.6:
-                return Look("moods", 1, self.facing)
-            anim, frame = EXPRESSION_FRAMES[expression]
+            anim, frame, blink_frame = EXPRESSION_FRAMES[expression]
+            intro = EXPRESSION_INTROS.get(expression)
+            if intro:
+                frames, seconds = intro
+                i = int((now - self.expression_t0) / seconds)
+                if i < len(frames):
+                    return Look(anim, frames[i], self.facing)
             if expression == "sleepy":
                 frame = int(now * 1.5) % 6
-            elif blink and anim == "blink":
-                frame = 3
+            elif blink:
+                frame = blink_frame
             return Look(anim, frame, self.facing)
         if state == "pensando":
             frames = (2, 2, 3, 3, 4, 2)
@@ -816,7 +921,8 @@ class Brain:
         if state == "ouvindo":
             return Look("blink", 3 if blink else 1, self.facing)
         if state == "erro":
-            return Look("moods", 3, self.facing)
+            frames = (3, 4, 4, 5)
+            return Look("confused", frames[int(now / 0.9) % len(frames)], self.facing)
         return Look("blink", 3 if blink else 0, self.facing)
 
     def is_resting(self) -> bool:

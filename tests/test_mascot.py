@@ -30,7 +30,8 @@ FLOOR = world()
 # ----------------- Sprite atlas -----------------
 ANIMATIONS = {"walk", "moods", "talk", "blink", "sit_down", "sitting", "turn", "stand_up", "held",
               "jump", "fall", "climb", "edge", "peek", "tea", "read", "close_book", "glance",
-              "think", "doze"}
+              "think", "doze", "happy", "point", "confused", "surprised", "sigh", "wake",
+              "tantrum"}
 
 
 def test_every_frame_of_the_atlas_renders_with_its_anchor_inside():
@@ -46,7 +47,7 @@ def test_every_frame_of_the_atlas_renders_with_its_anchor_inside():
             assert lo == 0 and hi == 255, (anim, f)        # real transparency around her
             # A climbing frame's anchor is the line of the sheet row, a little
             # below the drawing when her feet are off the ground.
-            slack = 2 if anim != "climb" else 30
+            slack = {"climb": 30, "tantrum": 45}.get(anim, 2)   # tantrum: jumps in place
             assert -2 <= ax <= img.width + 2 and -2 <= ay <= img.height + slack, (anim, f)
 
 
@@ -68,11 +69,30 @@ def test_facing_mirrors_side_views_only():
     assert abs(lax - (left.width - rax)) <= 1
     for x in (5, left.width // 2, left.width - 6):
         assert left.getpixel((x, 60)) == right.getpixel((left.width - 1 - x, 60))
-    # Front views and the dragged frames (they carry a drawn cursor) never flip.
-    for anim in ("blink", "held"):
-        a, anchor_a = sprite.render(Look(anim, 1, 1), H)
-        b, anchor_b = sprite.render(Look(anim, 1, -1), H)
-        assert anchor_a == anchor_b and a.tobytes() == b.tobytes()
+    # Front views never flip.
+    a, anchor_a = sprite.render(Look("blink", 1, 1), H)
+    b, anchor_b = sprite.render(Look("blink", 1, -1), H)
+    assert anchor_a == anchor_b and a.tobytes() == b.tobytes()
+    # Dragged, she hangs on the side opposite to the pull: the drawn cursor
+    # was erased from those frames, so they mirror like any side view.
+    right, (rax, _) = sprite.render(Look("held", 5, 1), H)
+    left, (lax, _) = sprite.render(Look("held", 5, -1), H)
+    assert sprite.facing_of("held") == "right" and sprite.mirrored(Look("held", 5, -1))
+    assert rax > right.width * 0.6 and lax < left.width * 0.4
+
+
+def test_dragged_frames_no_longer_carry_a_drawn_cursor():
+    # Right of her hand (the anchor) there used to be a white arrow.
+    for f in range(sprite.frame_count("held")):
+        img, (ax, ay) = sprite.render(Look("held", f, 1), 240)
+        box = (min(img.width - 1, ax + 6), min(img.height - 1, ay + 4), img.width, img.height)
+        if box[0] >= box[2] or box[1] >= box[3]:
+            continue
+        region = img.crop(box)
+        opaque = [region.getpixel((x, y)) for y in range(region.height) for x in range(region.width)]
+        opaque = [px for px in opaque if px[3] > 200]
+        white = [px for px in opaque if min(px[:3]) >= 235]
+        assert len(white) < 12, (f, len(white))
 
 
 def test_size_scales_and_the_dragged_anchor_is_her_hand():
@@ -209,8 +229,11 @@ def test_sleeps_when_the_app_dozes_and_wakes_sleepy():
     assert look.anim == "sitting" and look.effect == "zzz"
     brain.set_app_state("acordada")
     run(brain, clock, FLOOR, 0.04)
-    assert brain.mode == "stand_up" and brain.expression == "sleepy"
-    assert run(brain, clock, FLOOR, 2, until=lambda b: b.mode == "idle")
+    assert brain.mode == "stand_up"
+    # Up on her feet, she yawns and rubs her eyes before carrying on.
+    seen = set()
+    assert run(brain, clock, FLOOR, 5, until=lambda b: seen.add(b.look(clock.t).anim) or b.mode == "idle")
+    assert {"stand_up", "wake"} <= seen
 
 
 def test_talking_moves_the_mouth():
@@ -237,7 +260,7 @@ def test_picked_up_she_dangles_then_falls_back_to_the_floor():
     assert (brain.x, brain.y) == (800, 400)
     assert brain.look(clock.t).anim == "held"
     run(brain, clock, FLOOR, 1.0)
-    assert brain.look(clock.t).frame >= 4                   # the dangling loop
+    assert brain.look(clock.t).frame == 0                   # hand never moved: she hangs still
     brain.release(clock.t)
     assert brain.mode == "air"
     assert run(brain, clock, FLOOR, 4, dt=0.02, until=lambda b: b.mode == "land")
@@ -386,7 +409,8 @@ def test_model_expression_lingers_then_returns_to_neutral():
     brain.set_expression("invented", clock.t)
     assert brain.expression == "neutral"
     brain.set_expression("deduction", clock.t)
-    assert brain.look(clock.t) == Look("think", 4, brain.facing)
+    assert brain.look(clock.t) == Look("point", 2, brain.facing)      # the gesture builds up
+    assert brain.look(clock.t + 2) == Look("point", 5, brain.facing)  # then she points
     brain.set_gesture("tea", clock.t)
     run(brain, clock, FLOOR, 0.04)
     assert brain.mode == "act" and brain.look(clock.t).anim == "tea"
@@ -703,14 +727,15 @@ def test_drag_by_the_hand_and_drop_then_click_and_double_click():
     m._on_event("down", px, py)
     cursor["pos"] = (wx + px + 40, wy + py - 200)
     m._on_event("move", px + 40, py - 200)
-    assert m.brain.mode == "held" and m.window.cursor_hidden == [True]
-    assert (m.brain.x, m.brain.y) == cursor["pos"]          # the drawn cursor's tip follows the real one
+    # The real cursor stays visible (an arrow, not the hand): she hangs from its tip.
+    assert m.brain.mode == "held" and m.window.cursor_hidden == [False] and not m.window.hand_cursor
+    assert (m.brain.x, m.brain.y) == cursor["pos"]          # her hand follows the cursor
     tick(m, clock)
     img, x, y = m.window.updates[-1]
     _, (ax, ay) = sprite.render(m.brain.look(clock.t), 136)
     assert (x + ax, y + ay) == cursor["pos"]
     m._on_event("up", px + 40, py - 200)
-    assert m.brain.mode == "air" and m.window.cursor_hidden == [True, False]
+    assert m.brain.mode == "air" and m.window.cursor_hidden == [False, False]
     tick(m, clock, 60)
     assert m.brain.y == 1032
     # A plain click: a reaction, not a drag.
@@ -1102,3 +1127,95 @@ def test_she_hurries_to_the_door():
     b.go_away(clock.t)
     assert run(b, clock, w, 30, until=lambda b: b.is_away)
     assert clock.t - start < 14
+
+
+# ----------------- Dragging by the hand -----------------
+def _held(seed=1):
+    clock = Clock()
+    brain = Brain(random.Random(seed))
+    brain.place(FLOOR, clock.t, x=600)
+    brain.grab(clock.t)
+    brain.drag_to(600, 600, clock.t)          # her hand goes under the cursor
+    return brain, clock
+
+
+def _pull(brain, clock, dx, dy, steps=10, dt=0.016):
+    for _ in range(steps):
+        clock.t += dt
+        brain.drag_to(brain.x + dx, brain.y + dy, clock.t)
+
+
+def test_dragged_pose_changes_only_while_the_mouse_moves():
+    brain, clock = _held()
+    clock.t += 0.6
+    assert brain.look(clock.t) == Look("held", 0, brain.facing)     # held still: calm
+    clock.t += 2.0
+    assert brain.look(clock.t).frame == 0                           # still nothing
+    _pull(brain, clock, 3, 0)                                       # a slow pull: she leans
+    assert brain.look(clock.t).frame in (2, 3)
+    frozen = brain.look(clock.t)
+    assert brain.look(clock.t + 0.05) == frozen                      # no mouse move, no new frame
+    _pull(brain, clock, 30, 0)                                      # fast: she flies behind the hand
+    assert brain.look(clock.t).frame in (4, 5, 6, 7, 8)
+    # The hand stops: she swings back under it and then stays still.
+    frames = [brain.look(clock.t + s).frame for s in (0.2, 0.3, 0.45, 0.6, 3.0)]
+    assert frames[-1] == 11 and frames[-2] == 11 and frames[0] in (8, 9)
+
+
+def test_she_hangs_on_the_side_opposite_to_the_pull():
+    brain, clock = _held()
+    _pull(brain, clock, 20, 0)
+    assert brain.facing == 1                      # pulled right: she trails on the left
+    _pull(brain, clock, -20, 0)
+    assert brain.facing == -1                     # pulled left: she swings to the right
+    look = brain.look(clock.t)
+    assert look.anim == "held" and sprite.mirrored(look)
+    _pull(brain, clock, 0, -25)                   # straight up: she keeps her side
+    assert brain.facing == -1
+
+
+def test_released_she_falls_from_the_side_she_hung_on():
+    brain, clock = _held()
+    _pull(brain, clock, -20, 0)
+    x = brain.x
+    brain.release(clock.t)
+    assert brain.x == pytest.approx(x + H * 0.3)
+    brain, clock = _held()
+    _pull(brain, clock, 20, 0)
+    x = brain.x
+    brain.release(clock.t)
+    assert brain.x == pytest.approx(x - H * 0.3)
+
+
+def test_shaken_she_stamps_her_feet_after_landing():
+    brain, clock = _held()
+    for _ in range(3):
+        _pull(brain, clock, 25, 0, steps=5)
+        _pull(brain, clock, -25, 0, steps=5)
+    assert brain.shaken
+    brain.release(clock.t)
+    assert run(brain, clock, FLOOR, 4, dt=0.02, until=lambda b: b.mode == "land")
+    seen = set()
+    run(brain, clock, FLOOR, 4, dt=0.04, until=lambda b: seen.add(b.look(clock.t).anim) or b.mode == "idle")
+    assert "tantrum" in seen and brain.expression == "annoyed"
+    # A calm drag does not end in a tantrum.
+    brain, clock = _held()
+    _pull(brain, clock, 10, 0)
+    brain.release(clock.t)
+    assert not brain.shaken
+    seen = set()
+    run(brain, clock, FLOOR, 6, dt=0.04, until=lambda b: seen.add(b.look(clock.t).anim) or b.mode == "idle")
+    assert "tantrum" not in seen
+
+
+def test_new_expressions_have_their_own_faces():
+    clock = Clock()
+    brain = Brain(random.Random(1))
+    brain.place(FLOOR, clock.t)
+    for expression, anim in (("happy", "happy"), ("surprised", "surprised"), ("annoyed", "sigh"),
+                             ("confused", "confused"), ("deduction", "point")):
+        brain.set_expression(expression, clock.t)
+        assert brain.look(clock.t + 3).anim == anim, expression
+    brain.set_expression("neutral", clock.t)
+    brain.set_app_state("erro")
+    assert brain.look(clock.t).anim == "confused"

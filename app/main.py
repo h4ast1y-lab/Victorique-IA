@@ -2,17 +2,18 @@ import asyncio
 import atexit
 import json
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.config import settings, DOCS_DIR, BASE_DIR, VALID_BACKENDS
+from app.config import settings, DATA_DIR, DOCS_DIR, BASE_DIR, VALID_BACKENDS
 from app.memory.database import init_db, get_connection
 from app.memory.conversation_store import conversation_store
 from app.memory.memory_store import memory_store
@@ -21,6 +22,7 @@ from app.core.personality import personality_manager
 from app.core import preferences
 from app.core.avatar_protocol import avatar_manifest
 from app.core import avatar_photo
+from app.core import attachments as chat_attachments
 from app.core.sse import sse_event
 from app.core.assistant import assistant_engine
 from app.core.backup import create_backup, list_backups, backup_path, restore_backup
@@ -110,7 +112,10 @@ async def security_middleware(request: Request, call_next):
 # ----------------- Models & Schemas -----------------
 class ChatRequest(BaseModel):
     conversation_id: Optional[str] = ""
-    message: str = Field(min_length=1)
+    # May be empty when the message carries only attachments.
+    message: str = ""
+    # Ids from POST /api/chat/attachments (images/documents that stay in the chat).
+    attachments: List[str] = Field(default_factory=list, max_length=10)
     model: Optional[str] = None
     backend: Optional[str] = None  # "ollama", "llama-cpp", "llama-cpp-server", "claude-code", "codex"
     project_id: Optional[str] = None
@@ -418,7 +423,7 @@ def voice_lab_audio(req: VoiceLabRequest):
 
 @app.get("/api/tts/demo")
 def voice_demo():
-    wav = BASE_DIR / "data/voice/victorique.wav"
+    wav = DATA_DIR / "voice" / "victorique.wav"
     if not wav.is_file():
         raise HTTPException(404, "Amostra ainda indisponível.")
     return FileResponse(wav, media_type="audio/wav")
@@ -545,10 +550,69 @@ async def llama_cpp_server_stop():
     return {"status": "stopped"}
 
 # ----------------- Chat (Streaming) -----------------
+@app.post("/api/chat/attachments")
+async def upload_chat_attachment(file: UploadFile = File(...)):
+    """Image or document for the next message. Stays in the chat, never in Documentos."""
+    try:
+        return await asyncio.to_thread(
+            chat_attachments.save_upload, file.file, file.filename or "", file.content_type
+        )
+    except chat_attachments.AttachmentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/chat/attachments/{att_id}")
+async def get_chat_attachment(att_id: str, download: bool = False):
+    row = chat_attachments.get(att_id)
+    path = chat_attachments.path_of(row) if row else None
+    if not row or not path.is_file():
+        raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+    inline = row["kind"] == "image" and not download
+    return FileResponse(
+        str(path),
+        media_type=row.get("mime") or "application/octet-stream",
+        filename=row["name"],
+        content_disposition_type="inline" if inline else "attachment",
+        # no-cache: revalidated each time (ETag), so a deleted chat's images vanish.
+        headers={"Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.post("/api/chat/attachments/{att_id}/open")
+async def open_chat_attachment(att_id: str):
+    """Opens the file in its Windows program (Word, Excel, the photo viewer...)."""
+    row = chat_attachments.get(att_id)
+    path = chat_attachments.path_of(row) if row else None
+    if not row or not path.is_file():
+        raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+    starter = getattr(os, "startfile", None)
+    if starter is None:
+        raise HTTPException(status_code=501, detail="Abrir arquivos só funciona no Windows.")
+    try:
+        await asyncio.to_thread(starter, str(path))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Não consegui abrir: {exc}")
+    return {"status": "opened"}
+
+
+@app.delete("/api/chat/attachments/{att_id}")
+async def discard_chat_attachment(att_id: str):
+    """Removes an attachment that was uploaded but not sent (the chip's x)."""
+    row = chat_attachments.get(att_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+    if row.get("conversation_id"):
+        raise HTTPException(status_code=409, detail="Esse anexo já faz parte de uma conversa.")
+    chat_attachments.discard(att_id)
+    return {"status": "deleted"}
+
+
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest, request: Request):
     if len(req.message) > settings.max_message_chars:
         raise HTTPException(status_code=413, detail="Mensagem longa demais.")
+    if not req.message.strip() and not req.attachments:
+        raise HTTPException(status_code=422, detail="Escreva uma mensagem ou anexe um arquivo.")
 
     conv = None
     if req.conversation_id:
@@ -560,13 +624,24 @@ async def chat_endpoint(req: ChatRequest, request: Request):
     if req.personality_id and not personality_manager.get_personality(req.personality_id):
         raise HTTPException(status_code=400, detail="Personalidade não encontrada.")
 
+    # Check the attachments before creating anything.
+    for att_id in req.attachments:
+        row = chat_attachments.get(att_id)
+        if not row or row.get("conversation_id") not in (None, conv["id"] if conv else None):
+            raise HTTPException(status_code=400, detail="Um dos anexos não existe mais. Anexe de novo.")
+
     if not conv:
-        title = req.message.strip()[:60] or "Nova Conversa"
+        first = chat_attachments.get(req.attachments[0]) if req.attachments else None
+        title = req.message.strip()[:60] or (first["name"][:60] if first else "") or "Nova Conversa"
         conv = conversation_store.create_conversation(
             title=title,
             project_id=req.project_id,
             personality_id=req.personality_id,
         )
+    try:
+        files = chat_attachments.bind(req.attachments, conv["id"])
+    except chat_attachments.AttachmentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     async def event_generator():
         backend = req.backend or _current_backend()
@@ -579,6 +654,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             personality_id=req.personality_id,
             enable_rag=req.enable_rag,
             deep_thinking=req.deep_thinking,
+            attachments=files,
         )
         try:
             async for chunk in agen:
@@ -650,6 +726,7 @@ async def delete_conversation(conv_id: str):
     ok = conversation_store.delete_conversation(conv_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
+    chat_attachments.delete_for_conversation(conv_id)
     return {"status": "deleted"}
 
 @app.get("/api/conversations/{conv_id}/export")

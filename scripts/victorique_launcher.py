@@ -45,7 +45,7 @@ def main() -> int:
         _error(f"Não achei run.py em:\n{root}\n\nDeixe o Victorique.exe na pasta do projeto.")
         return 1
     if pythonw is None:
-        _error(f"Não achei .venv\Scripts\pythonw.exe em:\n{root}\n\nConsulte o README para preparar o ambiente.")
+        _error(f"Não achei .venv\\Scripts\\pythonw.exe em:\n{root}\n\nConsulte o README para preparar o ambiente.")
         return 1
 
     log_dir = root / "data"

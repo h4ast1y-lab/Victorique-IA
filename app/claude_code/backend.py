@@ -23,6 +23,7 @@ from claude_agent_sdk import (
 from app.claude_code.options import build_options
 from app.claude_code.permissions import PermissionBridge
 from app.config import settings
+from app.core import attachments as chat_attachments
 from app.library import activity
 from app.core.avatar_protocol import AVATAR_INSTRUCTIONS, AvatarControlParser
 from app.core.deep_thinking import DEEP_THINKING_INSTRUCTIONS, THOUGHT_ONLY_NOTE, ThoughtRouter
@@ -61,6 +62,12 @@ TOOLS_NOTE = (
     "(o usuário aprova na barra de autorização). Nada se apaga: descartes vão para a Reserva "
     "(_Quarentena) e o usuário pode desfazer pelo Organizador. Pastas do sistema (Windows, "
     "Program Files, AppData) são proibidas.\n"
+    "DOCUMENTOS (Word, Excel, PowerPoint, PDF, CSV): para ler, use ler_documento (paginado; "
+    "[¶n] numera parágrafos do Word, planilhas aparecem com colunas em letras). Para alterar, "
+    "use editar_word, editar_planilha, editar_pdf ou criar_documento, nunca Bash, scripts ou "
+    "Write em arquivos binários. O original sempre vai para a Reserva antes; diga ao usuário "
+    "onde ficou a versão nova. Anexos do chat ficam nos dados do app e não são alterados: a "
+    "versão editada vai para Documentos\\Victorique.\n"
     "Responda sempre em português do Brasil."
 )
 
@@ -97,6 +104,37 @@ def build_append_prompt(
     if note:
         parts.append(note)
     return "\n\n".join(parts)
+
+
+def build_user_content(user_message: str, attachments: Optional[List[Dict[str, Any]]]) -> Any:
+    """The prompt: plain text, or content blocks when images go along."""
+    files = list(attachments or [])
+    if not files:
+        return user_message
+    pictures = chat_attachments.images(files)
+    blocks: List[Dict[str, Any]] = []
+    for row in pictures:
+        try:
+            media, data = chat_attachments.image_base64(row)
+        except Exception as exc:
+            logger.warning("anexo %s não pôde ser lido: %s", row.get("name"), exc)
+            continue
+        blocks.append({"type": "image", "source": {"type": "base64", "media_type": media, "data": data}})
+    note = chat_attachments.prompt_note(files, images_inline=bool(blocks))
+    text = ((user_message or "").strip() + "\n\n" + note).strip()
+    if not blocks:
+        return text
+    blocks.append({"type": "text", "text": text})
+    return blocks
+
+
+async def _single_message(content: List[Dict[str, Any]]):
+    """client.query() with content blocks takes an async iterable of messages."""
+    yield {
+        "type": "user",
+        "message": {"role": "user", "content": content},
+        "parent_tool_use_id": None,
+    }
 
 
 def _result_text(content: Any) -> str:
@@ -253,12 +291,13 @@ class ClaudeCodeBackend:
         self.last_error: Optional[str] = None
         self._cleanup: Set[asyncio.Task] = set()
 
-    async def _attempt(self, turn: _Turn, prompt: str, options: Any) -> None:
+    async def _attempt(self, turn: _Turn, prompt: Any, options: Any) -> None:
         client = self.client_factory(options)
         turn.client = client
         try:
             await client.connect()
-            await client.query(prompt)
+            # A fresh iterable per attempt: a resumed session may be retried.
+            await client.query(prompt if isinstance(prompt, str) else _single_message(prompt))
             async for message in client.receive_response():
                 turn.handle(message)
         finally:
@@ -268,7 +307,7 @@ class ClaudeCodeBackend:
                 logger.debug("disconnect failed: %s", exc)
             turn.client = None
 
-    async def _consume(self, turn: _Turn, prompt: str, make_options, resume: Optional[str]) -> None:
+    async def _consume(self, turn: _Turn, prompt: Any, make_options, resume: Optional[str]) -> None:
         try:
             failure: Optional[BaseException] = None
             try:
@@ -330,6 +369,7 @@ class ClaudeCodeBackend:
         project_id: Optional[str],
         personality_id: Optional[str],
         deep_thinking: bool = False,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncGenerator[str, None]:
         """Yields SSE strings. The caller has already saved the user message."""
         queue: asyncio.Queue = asyncio.Queue()
@@ -353,8 +393,9 @@ class ClaudeCodeBackend:
             yield sse_event({
                 "type": "meta", "conversation_id": conversation_id, "backend": "claude-code",
             })
+            prompt = await asyncio.to_thread(build_user_content, user_message, attachments)
             consumer = asyncio.create_task(
-                self._consume(turn, user_message, make_options, resume)
+                self._consume(turn, prompt, make_options, resume)
             )
             while True:
                 item = await queue.get()

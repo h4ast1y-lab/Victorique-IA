@@ -6,6 +6,7 @@ from app.security.permissions import ActionCategory, security_manager
 from app.tools.file_tools import (
     list_directory, read_file, search_files, write_file, create_directory, delete_file
 )
+from app.tools.office import create_document, edit_pdf, edit_spreadsheet, edit_word
 from app.tools.organizer import move_files, rename_file
 from app.tools.system_tools import calculate, get_system_info, get_system_metrics
 from app.tools.web_search import search_web, read_url
@@ -89,8 +90,10 @@ class ToolRegistry:
         self.register(ToolDefinition(
             name="read_file",
             description=(
-                "Lê o conteúdo em texto de arquivos no computador, incluindo PDF, EPUB e DOCX. "
-                "Para livros/documentos longos, lê por páginas (padrão páginas 1-3) ou busca trechos com 'query' para economizar contexto."
+                "Lê o conteúdo em texto de arquivos no computador, incluindo PDF, EPUB, Word (.docx), "
+                "Excel (.xlsx/.xls), PowerPoint (.pptx) e CSV. Documentos longos vêm em partes "
+                "(páginas, seções, planilhas ou slides; padrão 1-3) e 'query' busca trechos. "
+                "No Word, [¶n] numera os parágrafos; nas planilhas, colunas em letras e linhas numeradas."
             ),
             category=ActionCategory.FREE,
             func=read_file,
@@ -98,7 +101,7 @@ class ToolRegistry:
                 "path": {"type": "string", "description": "Caminho completo do arquivo a ler (ex.: 'C:\\caminho\\arquivo.pdf')."},
                 "start_page": {
                     "type": "integer",
-                    "description": "Página/seção inicial (1-based) para PDF/EPUB/DOCX. Padrão: 1.",
+                    "description": "Parte inicial (1-based): página do PDF, seção do Word, planilha ou slide. Padrão: 1.",
                 },
                 "end_page": {
                     "type": "integer",
@@ -167,6 +170,91 @@ class ToolRegistry:
                     "description": "Se falso, recusa sobrescrever um arquivo existente.",
                 },
             }, required=["path", "content"]),
+        ))
+        self.register(ToolDefinition(
+            name="edit_word",
+            description=(
+                "Edita um documento Word (.docx) preservando a formatação. Leia antes com read_file "
+                "(os [¶n] numeram os parágrafos). Operações, aplicadas em ordem: "
+                "{op:'replace', find, replace, count?}; {op:'append_paragraph', text, style?}; "
+                "{op:'append_heading', text, level}; {op:'append_table', rows:[[...]]}; "
+                "{op:'insert_paragraph', text, before|after: n}; {op:'set_paragraph', index: n, text}; "
+                "{op:'delete_paragraph', index: n}. Os números ¶ são os da leitura, mesmo depois "
+                "de outras operações. Editado no lugar, o original vai antes para a Reserva; "
+                "anexos do chat geram uma cópia em Documentos/Victorique."
+            ),
+            category=ActionCategory.REQUIRES_AUTH,
+            func=edit_word,
+            risk_description="O documento Word será alterado (o original fica guardado na Reserva).",
+            parameters=_schema({
+                "path": {"type": "string", "description": "Caminho do .docx."},
+                "operations": {"type": "array", "items": {"type": "object"},
+                               "description": "Lista de operações (veja a descrição)."},
+                "output_path": {"type": "string",
+                                "description": "Opcional: salvar a versão editada em outro arquivo."},
+            }, required=["path", "operations"]),
+        ))
+        self.register(ToolDefinition(
+            name="edit_spreadsheet",
+            description=(
+                "Edita uma planilha Excel (.xlsx/.xlsm; um .xls antigo vira .xlsx) ou um CSV. "
+                "Operações: {op:'set_cells', sheet?, cells:{'A1': valor ou '=FÓRMULA'}}; "
+                "{op:'append_rows', sheet?, rows:[[...]]}; {op:'insert_rows', sheet?, at, rows}; "
+                "{op:'delete_rows', sheet?, start, count}; {op:'add_sheet', name, rows?}; "
+                "{op:'rename_sheet', sheet, new_name}; {op:'delete_sheet', sheet}. "
+                "O original vai antes para a Reserva."
+            ),
+            category=ActionCategory.REQUIRES_AUTH,
+            func=edit_spreadsheet,
+            risk_description="A planilha será alterada (o original fica guardado na Reserva).",
+            parameters=_schema({
+                "path": {"type": "string", "description": "Caminho da planilha (.xlsx, .xlsm, .xls, .csv, .tsv)."},
+                "operations": {"type": "array", "items": {"type": "object"},
+                               "description": "Lista de operações (veja a descrição)."},
+                "output_path": {"type": "string",
+                                "description": "Opcional: salvar a versão editada em outro arquivo."},
+            }, required=["path", "operations"]),
+        ))
+        self.register(ToolDefinition(
+            name="edit_pdf",
+            description=(
+                "Edita as páginas de um PDF: {op:'keep_pages', pages:'1-3,5'} (extrair/reordenar), "
+                "{op:'delete_pages', pages}, {op:'rotate', pages?, degrees}, "
+                "{op:'merge', paths:[outros PDFs]}, {op:'metadata', title?, author?}. "
+                "O texto dentro do PDF não é editável: para reescrever, crie um .docx com create_document. "
+                "Use output_path para gerar um PDF novo; sem ele, o original vai para a Reserva."
+            ),
+            category=ActionCategory.REQUIRES_AUTH,
+            func=edit_pdf,
+            risk_description="O PDF será alterado ou um novo PDF será criado.",
+            parameters=_schema({
+                "path": {"type": "string", "description": "Caminho do PDF."},
+                "operations": {"type": "array", "items": {"type": "object"},
+                               "description": "Lista de operações (veja a descrição)."},
+                "output_path": {"type": "string", "description": "Opcional: arquivo PDF de saída."},
+            }, required=["path", "operations"]),
+        ))
+        self.register(ToolDefinition(
+            name="create_document",
+            description=(
+                "Cria um documento novo: .docx ou .pptx a partir de texto estilo Markdown "
+                "(# títulos, - listas, tabelas | a | b |; no .pptx cada # é um slide), "
+                ".xlsx a partir de 'rows' ou 'sheets', .csv a partir de 'rows', ou .md/.txt."
+            ),
+            category=ActionCategory.REQUIRES_AUTH,
+            func=create_document,
+            risk_description="Um novo documento será criado no seu computador.",
+            parameters=_schema({
+                "path": {"type": "string", "description": "Caminho do arquivo novo (a extensão define o tipo)."},
+                "content": {"type": "string", "description": "Texto estilo Markdown (docx, pptx, md, txt)."},
+                "title": {"type": "string", "description": "Título opcional do documento."},
+                "rows": {"type": "array", "items": {"type": "array"},
+                         "description": "Linhas da tabela (xlsx, csv); a primeira é o cabeçalho."},
+                "sheets": {"type": "object",
+                           "description": "Para .xlsx com várias planilhas: {nome: [[linhas]]}."},
+                "overwrite": {"type": "boolean",
+                              "description": "Substituir um arquivo existente (o antigo vai para a Reserva)."},
+            }, required=["path"]),
         ))
         self.register(ToolDefinition(
             name="create_directory",

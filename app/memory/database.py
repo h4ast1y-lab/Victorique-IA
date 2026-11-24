@@ -34,6 +34,8 @@ COLUMN_MIGRATIONS = [
     ("messages", "reasoning_seconds", "REAL"),
     # Codex thread resumed by each conversation in codex mode.
     ("conversations", "codex_thread_id", "TEXT"),
+    # Images/documents sent with a user message (public metadata, no disk path).
+    ("messages", "attachments_json", "TEXT"),
 ]
 
 
@@ -104,6 +106,20 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
     );
+
+    -- Images and documents sent in the chat (files in data/chat_files/<id>/;
+    -- never in Documentos). Deleted with their conversation.
+    CREATE TABLE IF NOT EXISTS chat_attachments (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT,
+        name TEXT NOT NULL,
+        stored_name TEXT NOT NULL,
+        kind TEXT NOT NULL,                -- 'image' or 'document'
+        mime TEXT,
+        size INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_attachments_conv ON chat_attachments(conversation_id);
 
     -- Long-term Persistent Memories
     CREATE TABLE IF NOT EXISTS memories (

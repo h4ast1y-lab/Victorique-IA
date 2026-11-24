@@ -172,6 +172,8 @@ class DocumentLoader:
             return self._load_docx(p)
         elif ext == ".epub":
             return self._load_epub(p)
+        elif ext in [".xlsx", ".xlsm", ".xls", ".pptx", ".tsv"]:
+            return self._load_office(p)
         elif ext in [".csv", ".json", ".py", ".js", ".html", ".css", ".xml", ".yaml", ".yml"]:
             return self._load_structured_text(p)
         else:
@@ -198,6 +200,16 @@ class DocumentLoader:
             return [{"page": 1, "text": full_text}]
         except Exception as exc:
             raise ValueError(f"Falha ao ler arquivo DOCX '{path.name}': {exc}") from exc
+
+    def _load_office(self, path: Path) -> List[Dict[str, Any]]:
+        """Planilhas e apresentações: cada planilha/bloco/slide vira uma página."""
+        from app.tools import office
+
+        try:
+            pages, _unit = office.document_pages(path)
+        except Exception as exc:
+            raise ValueError(f"Falha ao ler '{path.name}': {exc}") from exc
+        return [{"page": n, "text": text} for n, text in pages if text.strip()]
 
     def _load_epub(self, path: Path) -> List[Dict[str, Any]]:
         """Extrai capítulos/seções de livro digital (.epub)."""

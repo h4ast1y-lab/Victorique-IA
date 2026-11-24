@@ -62,6 +62,7 @@ class Settings(BaseModel):
     max_upload_mb: int = 50
     allowed_document_extensions: list[str] = [
         ".pdf", ".txt", ".md", ".docx", ".epub",
+        ".xlsx", ".xlsm", ".xls", ".pptx", ".tsv",
         ".csv", ".json", ".py", ".js", ".html",
         ".css", ".xml", ".yaml", ".yml"
     ]

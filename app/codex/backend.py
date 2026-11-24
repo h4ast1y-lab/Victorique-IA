@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Deque, Dict, List, Optional
 
 from app.config import settings
+from app.core import attachments as chat_attachments
 from app.core.avatar_protocol import AVATAR_INSTRUCTIONS, AvatarControlParser
 from app.core.deep_thinking import DEEP_THINKING_INSTRUCTIONS, THOUGHT_ONLY_NOTE, ThoughtRouter
 from app.core.dialogue_style import style_note
@@ -109,11 +110,15 @@ def find_codex() -> Optional[List[str]]:
     return None
 
 
-def build_command(prefix: List[str], workspace: str, thread_id: Optional[str], model: str) -> List[str]:
+def build_command(prefix: List[str], workspace: str, thread_id: Optional[str], model: str,
+                  images: Optional[List[str]] = None) -> List[str]:
     """`codex exec` in a read-only sandbox; the prompt comes from stdin ("-")."""
     cmd = [*prefix, "exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-C", workspace]
     if model:
         cmd += ["-m", model]
+    # "--image=path" (one per file): the flag takes several values, so the "="
+    # form keeps it from swallowing the arguments that follow.
+    cmd += [f"--image={path}" for path in images or []]
     if thread_id:
         cmd += ["resume", thread_id]
     cmd.append("-")
@@ -171,18 +176,23 @@ def _transcript(history: List[Dict[str, Any]], user_message: str) -> str:
     lines = []
     for message in prior[-HISTORY_MESSAGES:]:
         who = "Usuário" if message.get("role") == "user" else "Você"
-        lines.append(f"{who}: {truncate(str(message.get('content') or ''), HISTORY_CHARS)}")
+        text = truncate(str(message.get("content") or ""), HISTORY_CHARS)
+        if message.get("attachments"):
+            text = (text + " " + chat_attachments.history_note(message["attachments"])).strip()
+        lines.append(f"{who}: {text}")
     return "\n\n".join(lines)
 
 
 def build_prompt(user_message: str, project_id: Optional[str], personality_id: Optional[str],
-                 history: List[Dict[str, Any]], deep_thinking: bool, resumed: bool) -> str:
+                 history: List[Dict[str, Any]], deep_thinking: bool, resumed: bool,
+                 attachments_note: str = "") -> str:
     personality = personality_manager.get_personality(personality_id) if personality_id else None
+    tail = f"\n\n{attachments_note}" if attachments_note else ""
     if resumed:
         name = (personality or personality_manager.get_default_personality() or {}).get("name", "Victorique")
         parts = [REMINDER.format(name=name)]
         parts.append(DEEP_THINKING_INSTRUCTIONS if deep_thinking else NO_THOUGHT_NOTE)
-        parts.append(f"MENSAGEM DO USUÁRIO:\n{user_message}")
+        parts.append(f"MENSAGEM DO USUÁRIO:\n{user_message}{tail}")
         return "\n\n".join(parts)
     text = (
         "<instrucoes_do_aplicativo>\n"
@@ -192,7 +202,7 @@ def build_prompt(user_message: str, project_id: Optional[str], personality_id: O
     transcript = _transcript(history, user_message)
     if transcript:
         text += f"<conversa_ate_aqui>\n{transcript}\n</conversa_ate_aqui>\n\n"
-    return text + f"MENSAGEM DO USUÁRIO:\n{user_message}"
+    return text + f"MENSAGEM DO USUÁRIO:\n{user_message}{tail}"
 
 
 # ----------------- The Biblioteca -----------------
@@ -442,9 +452,13 @@ class CodexBackend:
         project_id: Optional[str],
         personality_id: Optional[str],
         deep_thinking: bool = False,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncGenerator[str, None]:
         """Yields SSE strings. The caller has already saved the user message."""
         yield sse_event({"type": "meta", "conversation_id": conversation_id, "backend": "codex"})
+        files = list(attachments or [])
+        image_paths = [str(chat_attachments.path_of(f)) for f in chat_attachments.images(files)]
+        attachments_note = chat_attachments.prompt_note(files, images_inline=bool(image_paths))
         prefix = (self.finder or find_codex)()
         if not prefix:
             self.last_error = INSTALL_HELP
@@ -470,8 +484,9 @@ class CodexBackend:
             thread_id = resume
             while True:
                 prompt = build_prompt(user_message, project_id, personality_id, history,
-                                      deep_thinking, resumed=bool(thread_id))
-                cmd = build_command(prefix, workspace, thread_id, settings.codex_model)
+                                      deep_thinking, resumed=bool(thread_id),
+                                      attachments_note=attachments_note)
+                cmd = build_command(prefix, workspace, thread_id, settings.codex_model, image_paths)
                 code: Optional[int] = None
                 stderr = ""
                 try:

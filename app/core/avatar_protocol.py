@@ -25,6 +25,7 @@ EXPRESSIONS = (
     "focused",
     "sleepy",
     "deduction",
+    "confused",
 )
 
 GESTURES = (
@@ -80,7 +81,7 @@ CONTROLE VISUAL DA VICTORIQUE:
 - IDs de gesto permitidos: {', '.join(GESTURES)}.
 - Depois dos marcadores, escreva a resposta normalmente. Não explique, repita nem coloque os marcadores em Markdown.
 - Use os controles somente na resposta final. Antes de chamar ferramentas, não emita marcador nem preâmbulo.
-- A expressão deve acompanhar o sentido real: concerned para preocupação, annoyed para irritação, happy para satisfação, embarrassed para elogio, focused para trabalho técnico, deduction ao concluir um raciocínio e neutral quando nenhuma outra se aplicar.
+- A expressão deve acompanhar o sentido real: concerned para preocupação, annoyed para irritação, happy para satisfação, embarrassed para elogio, focused para trabalho técnico, deduction ao concluir um raciocínio, confused quando o pedido for ambíguo ou algo não fizer sentido e neutral quando nenhuma outra se aplicar.
 - Gestos são raros. Use deduction apenas para uma conclusão importante, pipe ao refletir, page-turn ao consultar informação, tea em uma pausa tranquila e hair-adjust para leve constrangimento. A interface cuida sozinha de fala, escuta, sono e piscadas.
 Exemplo:
 [expression:skeptical]

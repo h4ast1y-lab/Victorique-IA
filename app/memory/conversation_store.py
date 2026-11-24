@@ -95,6 +95,7 @@ class ConversationStore:
         tool_trace: Optional[List[Dict[str, Any]]] = None,
         reasoning: Optional[str] = None,
         reasoning_seconds: Optional[float] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         msg_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
@@ -105,17 +106,22 @@ class ConversationStore:
         reasoning = reasoning or None
         if reasoning is None:
             reasoning_seconds = None
+        attachments = [
+            {k: a.get(k) for k in ("id", "name", "kind", "mime", "size", "url")}
+            for a in attachments or []
+        ] or None
+        attachments_json = json.dumps(attachments, ensure_ascii=False) if attachments else None
 
         with get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO messages
                     (id, conversation_id, role, content, sources_json, tool_trace_json,
-                     reasoning, reasoning_seconds, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     reasoning, reasoning_seconds, attachments_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (msg_id, conversation_id, role, content, sources_json, tool_trace_json,
-                 reasoning, reasoning_seconds, now)
+                 reasoning, reasoning_seconds, attachments_json, now)
             )
             # Update parent conversation timestamp
             conn.execute(
@@ -132,6 +138,7 @@ class ConversationStore:
             "tool_trace": tool_trace,
             "reasoning": reasoning,
             "reasoning_seconds": reasoning_seconds,
+            "attachments": attachments,
             "created_at": now
         }
 
@@ -141,7 +148,8 @@ class ConversationStore:
             rows = conn.execute(
                 """
                 SELECT id, conversation_id, role, content, sources_json,
-                       tool_trace_json, reasoning, reasoning_seconds, created_at
+                       tool_trace_json, reasoning, reasoning_seconds, attachments_json,
+                       created_at
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY created_at DESC, rowid DESC
@@ -167,6 +175,11 @@ class ConversationStore:
                     item["tool_trace"] = json.loads(raw_trace) if raw_trace else None
                 except json.JSONDecodeError:
                     item["tool_trace"] = None
+                raw_attachments = item.pop("attachments_json", None)
+                try:
+                    item["attachments"] = json.loads(raw_attachments) if raw_attachments else None
+                except json.JSONDecodeError:
+                    item["attachments"] = None
                 messages.append(item)
             return messages
 
@@ -212,6 +225,9 @@ class ConversationStore:
             for m in messages:
                 author = "👤 Usuário" if m["role"] == "user" else "🤖 Assistente"
                 lines.append(f"### {author}\n{m['content']}\n")
+                if m.get("attachments"):
+                    names = ", ".join(a.get("name", "?") for a in m["attachments"])
+                    lines.append(f"*Anexos: {names}*\n")
                 if m.get("sources"):
                     lines.append("\n**Fontes consultadas:**")
                     for s in m["sources"]:
@@ -224,6 +240,8 @@ class ConversationStore:
             for m in messages:
                 author = "Usuário" if m["role"] == "user" else "Assistente"
                 lines.append(f"[{author}]: {m['content']}\n")
+                if m.get("attachments"):
+                    lines.append("  (anexos: " + ", ".join(a.get("name", "?") for a in m["attachments"]) + ")\n")
             return "\n".join(lines)
 
 conversation_store = ConversationStore()

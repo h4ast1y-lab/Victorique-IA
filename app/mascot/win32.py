@@ -476,8 +476,9 @@ class LayeredWindow:
         return self._visible
 
     def hide_cursor(self, hidden: bool) -> None:
-        """While she is dragged the frames draw the cursor in her hand, so the
-        real one hides (window thread only; it comes back on release)."""
+        """Hides or restores the real cursor (window thread only). Dragged, she
+        hangs from the real arrow, so the desktop keeps it visible; ``True`` is
+        kept for frames that draw their own cursor."""
         self.cursor_hidden = hidden
         if hidden:
             user32.SetCursor(None)

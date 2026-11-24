@@ -175,7 +175,8 @@ Tudo por padrão em `data/`:
 | Caminho | Conteúdo |
 |---|---|
 | `data/assistant.db` | histórico, memórias, projetos, personalidades, índice RAG, auditoria |
-| `data/documents/` | cópias dos documentos importados |
+| `data/documents/` | cópias dos documentos importados (aba Documentos) |
+| `data/chat_files/` | imagens e documentos anexados no chat (só da conversa; somem com ela) |
 | `data/backups/` | snapshots do banco |
 | `data/falas.md` | banco de falas espontâneas da Victorique (editável; criado na primeira vez) |
 | `data/vida_propria.json` | estado da vida própria: últimas falas, limites, silêncio |
@@ -329,6 +330,8 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 | Biblioteca: salão em pixel art, uma estante por pasta e um livro por arquivo; ela encena o que faz nos arquivos | implementado; testado automaticamente e no navegador, com uma ação real do organizador (seção 17) |
 | Uma Victorique só: a mascote passa por uma portinha e vai trabalhar na Biblioteca; mover, renomear e mandar para a Reserva à mão no salão | implementado; testado automaticamente e no navegador; a porta na área de trabalho de verdade ainda não foi vista (seção 17) |
 | Modo Codex (CLI da OpenAI), somente leitura | implementado; testado com um processo falso; não testado com o Codex real (seção 18) |
+| Anexar imagens e documentos no chat (clipe, colar ou arrastar); ficam só na conversa, nunca em Documentos | implementado; testado automaticamente e no navegador (seção 19) |
+| Ler e editar Word, Excel, PowerPoint, PDF e CSV (o original vai para a Reserva) | implementado; testado automaticamente (seção 19) |
 
 ---
 
@@ -608,15 +611,21 @@ só uma linha com o estado dela e a lua do não perturbar.
   ela cai no que estiver embaixo. Só vale a parte visível da borda: uma janela na frente
   divide o caminho. Ficam de fora as janelas maximizadas, sem título, de ferramenta e as
   que deixam o clique passar. Desligue em Configurações → «Subir nas janelas abertas».
-- **Com o mouse:** arraste-a pela mão (o cursor do Windows some e ela aparece segurando
-  um cursor desenhado). Solta, ela cai no que estiver embaixo: a borda de uma janela ou
-  a barra de tarefas do monitor. Um movimento rápido ao soltar a arremessa. Um clique dá
+- **Com o mouse:** arraste-a pela mão: ela fica pendurada na ponta da seta do Windows,
+  que continua visível. A pose só muda quando o mouse se mexe: parado, ela fica quieta;
+  puxada devagar, se inclina; puxada rápido, voa atrás da mão, sempre do lado oposto ao
+  puxão (puxe para a esquerda e ela balança para a direita). Quando a mão para, ela volta
+  balançando para baixo dela. Sacudida de um lado para o outro, ao pousar ela bate o pé
+  de birra. Solta, ela cai do lado em que estava pendurada, no que estiver embaixo: a
+  borda de uma janela ou a barra de tarefas do monitor. Um movimento rápido ao soltar a
+  arremessa. Um clique dá
   uma reação e abre a conversa rápida ao lado dela (seção 16); dois cliques abrem a
   janela grande; o botão direito abre o menu (abrir a conversa, conversa rápida, ficar
   parada, Silêncio de 2 horas, não perturbar, esconder, encerrar o assistente).
 - **Estados:** pensando, ela para com ar pensativo; falando, mexe a boca; ouvindo, fica
-  atenta; erro, fica contrariada e treme; sem interação (minutos configuráveis), senta
-  e dorme com «z z z».
+  atenta; erro, fica confusa; sem interação (minutos configuráveis), senta e dorme com
+  «z z z». Ao acordar, boceja e esfrega os olhos. De vez em quando boceja ou suspira de
+  braços cruzados.
 - **Expressões do modelo:** nos dois modos, a resposta final pode começar com
   marcadores ocultos `[expression:ID]` e `[gesture:ID]` (IDs fixos, ver
   `GET /api/avatar/manifest`). Eles saem do texto antes de salvar, mostrar ou ler em voz
@@ -634,16 +643,19 @@ só uma linha com o estado dela e a lua do não perturbar.
   comportamento ao fechar a janela.
   Para desligar no arranque, use `ASSISTANT_MASCOT=0`.
 
-Como funciona: a arte são 20 folhas de sprites (`app/mascot/assets/source/`, uma por
+Como funciona: a arte são 27 folhas de sprites (`app/mascot/assets/source/`, uma por
 animação: andar, humores, falar, piscar, sentar, sentada, virar, levantar, arrastada,
-pular, cair, escalar, beirada, espiar, chá, ler, fechar o livro, olhar, pensar e
-cochilar). O script `scripts/build_mascot_sprites.py` recorta os quadros. Ele tira o
+pular, cair, escalar, beirada, espiar, chá, ler, fechar o livro, olhar, pensar,
+cochilar e, desde 24/11/2026, feliz, apontar, confusa, surpresa, suspirar, despertar e
+birra). As expressões `happy`, `surprised`, `annoyed`, `deduction` e `confused` usam
+essas folhas novas. O script `scripts/build_mascot_sprites.py` recorta os quadros. Ele tira o
 fundo pelo alfa ou pelo branco e as sombras do chão pela cor, e iguala a escala pela
 altura dela de pé. Em cada quadro ele marca o ponto de apoio: as solas, o assento na
-beirada, a ponta do cursor desenhado quando arrastada ou a borda da tela quando espia.
+beirada, a mão quando arrastada (o cursor desenhado nessas folhas é apagado) ou a borda
+da tela quando espia.
 O resultado é o atlas `app/mascot/assets/victorique.webp` + `victorique.json` (WebP com
 alfa sem perda, cerca de 1,7 MB). Para gerar de novo, rode
-`.venv\Scripts\python.exe scripts\build_mascot_sprites.py` (cerca de 10 s;
+`.venv\Scripts\python.exe scripts\build_mascot_sprites.py` (cerca de 15 s;
 `--debug PASTA` grava folhas de conferência). Duas folhas (arrastada e cair) têm um
 traço um pouco diferente, com tiara em vez da touca, e foram usadas como vieram.
 
@@ -839,3 +851,63 @@ a retomada, a tradução dos eventos, o Codex ausente, a retomada que falha, o l
 inválido, o Pensamento profundo e a ligação com o app. No navegador, em 24/11/2026: o
 seletor, o selo e a ajuda de instalação no chat. O Codex não estava instalado nesta
 máquina, então ainda não houve um teste com o Codex real.
+
+---
+
+## 19. Anexos no chat e documentos de escritório
+
+### Anexos
+
+- O clipe da caixa de mensagem anexa **imagens** (PNG, JPG, WEBP, GIF, BMP) e
+  **documentos** (PDF, Word, Excel, PowerPoint, CSV, EPUB e textos) à mensagem. Também
+  dá para colar um print (Ctrl+V) ou arrastar arquivos para a caixa. Até 10 por
+  mensagem; uma mensagem pode ter só anexos.
+- Os anexos **ficam só no chat**: vão para `data/chat_files/<id>/`, não entram na aba
+  Documentos nem no índice de busca. Apagar a conversa apaga os anexos dela; anexos
+  enviados e nunca mandados somem depois de um dia. Para pôr um arquivo na busca de
+  documentos, use a aba Documentos.
+- Na conversa, as imagens aparecem como miniaturas (clique para ampliar) e os documentos
+  como etiquetas (clique para abrir no programa do Windows).
+- **Claude Code:** as imagens vão como imagens (reduzidas a no máximo 1568 px) e ela as
+  vê; dos documentos vão o caminho e uma prévia do texto, e ela lê o resto com
+  `ler_documento`.
+- **Codex:** as imagens vão com `--image`; documentos como caminho e prévia.
+- **Ollama:** as imagens vão no campo `images` (só modelos com visão as entendem);
+  llama.cpp recebe só a prévia dos documentos e avisa que não vê imagens.
+
+### Ler e editar documentos
+
+- `read_file` (modo local) e `ler_documento` (Claude Code) leem Word, Excel (.xlsx,
+  .xlsm e o antigo .xls), PowerPoint, CSV, PDF e EPUB em partes: seções do Word,
+  planilhas, slides ou blocos de linhas. No Word, `[¶n]` numera os parágrafos; nas
+  planilhas aparecem as colunas em letras, as linhas numeradas e as fórmulas. Formatos
+  antigos (.doc, .ppt) e do LibreOffice dão uma mensagem pedindo para salvar no formato
+  novo.
+- Edição (sempre com aprovação; no Modo Turbo, sem perguntar):
+  - `edit_word` / `editar_word`: trocar texto (mesmo partido em pedaços de formatação,
+    mantendo o negrito e o itálico), inserir, reescrever ou remover parágrafos,
+    acrescentar títulos e tabelas;
+  - `edit_spreadsheet` / `editar_planilha`: preencher células e fórmulas, acrescentar,
+    inserir e remover linhas, criar, renomear e remover planilhas; CSV mantém o
+    separador; um .xls vira .xlsx;
+  - `edit_pdf` / `editar_pdf`: extrair, reordenar, remover e girar páginas, juntar PDFs,
+    metadados. O texto dentro do PDF não é editável: para reescrever, ela cria um .docx;
+  - `create_document` / `criar_documento`: .docx e .pptx a partir de texto no estilo
+    Markdown (títulos, listas, tabelas), .xlsx e .csv a partir de linhas, .md e .txt.
+- **Nada se perde:** antes de alterar um arquivo, o original é copiado para a Reserva
+  (`_Quarentena/<data>/…` da pasta autorizada). A gravação é atômica. Anexos do chat
+  ficam na pasta protegida do app e nunca são alterados: a versão editada vai para
+  `Documentos\Victorique\<nome> (editado).<ext>`. Uma planilha com gráficos ou tabelas
+  dinâmicas avisa que o editor pode não preservá-los.
+- Bibliotecas: `python-docx`, `openpyxl`, `python-pptx`, `xlrd` e `pypdf`
+  (`pip install -r requirements.txt`).
+
+### Verificação
+
+`tests/test_office.py` (13 testes: leitura de cada formato, edições com formatação
+preservada, Reserva, arquivos protegidos, aprovação e Modo Turbo, ferramentas do Claude
+Code) e `tests/test_chat_attachments.py` (12 testes: os anexos não vão para Documentos,
+envios ruins recusados, mensagem só com anexos, exclusão com a conversa, o que cada
+motor recebe). No navegador, em 24/11/2026: colar um print e um CSV, as etiquetas na
+caixa, o envio, as miniaturas e o visualizador, reabrir a conversa e apagá-la. Com o
+Claude Code real: ela leu o texto e a cor de fundo de uma imagem anexada.

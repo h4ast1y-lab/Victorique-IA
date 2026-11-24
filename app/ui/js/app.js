@@ -37,6 +37,8 @@ const authPayload = $('authPayload');
 const btnApproveAction = $('btnApproveAction');
 const btnRejectAction = $('btnRejectAction');
 const fileInput = $('fileInput');
+const chatFileInput = $('chatFileInput');
+const attachTray = $('attachTray');
 
 const SUGGESTIONS = [
   { icon: 'folder', label: 'Organizar uma pasta', prompt: 'Liste os arquivos da minha pasta Documentos e sugira uma forma de organizá-los.' },
@@ -120,7 +122,23 @@ function setupEventListeners() {
   $('btnSaveProject').addEventListener('click', saveProject);
   $('btnSaveMemory').addEventListener('click', saveMemory);
 
-  $('btnAttachDoc').addEventListener('click', () => fileInput.click());
+  $('btnAttachChat').addEventListener('click', () => chatFileInput.click());
+  chatFileInput.addEventListener('change', (e) => {
+    addChatFiles(e.target.files);
+    e.target.value = '';
+  });
+  setupAttachmentDrop();
+  chatInput.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (!files.length) return;
+    e.preventDefault();
+    addChatFiles(files.map(pastedName));
+  });
+  $('btnCloseLightbox').addEventListener('click', closeLightbox);
+  $('imageLightbox').addEventListener('click', (e) => { if (e.target.id === 'imageLightbox') closeLightbox(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('imageLightbox').hidden) closeLightbox();
+  });
   $('btnUploadDoc').addEventListener('click', () => fileInput.click());
   $('btnModalUploadDoc').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', handleFileUpload);
@@ -196,7 +214,221 @@ function autoGrow() {
 }
 
 function updateSendState() {
-  btnSend.disabled = !chatInput.value.trim();
+  const uploading = pendingAttachments.some(a => a.status === 'uploading');
+  const ready = pendingAttachments.some(a => a.status === 'ready');
+  btnSend.disabled = uploading || !(chatInput.value.trim() || ready);
+}
+
+// ----------------- Chat attachments (stay in the chat, never in Documentos) -----------------
+const ATTACH_IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'];
+const ATTACH_DOC_EXTS = ['.pdf', '.docx', '.xlsx', '.xlsm', '.xls', '.pptx', '.csv', '.tsv', '.epub',
+  '.txt', '.md', '.json', '.xml', '.html', '.htm', '.yaml', '.yml', '.log', '.py', '.js', '.ts', '.css',
+  '.ini', '.cfg', '.toml', '.sql'];
+const ATTACH_MAX = 10;
+let pendingAttachments = [];
+let attachSeq = 0;
+
+function fileExt(name) {
+  return ((name || '').match(/\.[^.]+$/) || [''])[0].toLowerCase();
+}
+
+function formatBytes(n) {
+  if (!n && n !== 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function pastedName(file) {
+  // Screenshots arrive as "image.png": give them a readable, unique name.
+  if (!/^image\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name || '')) return file;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+  const ext = fileExt(file.name) || '.png';
+  try { return new File([file], `colado-${stamp}${ext}`, { type: file.type }); } catch (_) { return file; }
+}
+
+function addChatFiles(fileList) {
+  const files = [...(fileList || [])];
+  for (const file of files) {
+    if (pendingAttachments.length >= ATTACH_MAX) {
+      toast(`No máximo ${ATTACH_MAX} anexos por mensagem.`, 'error');
+      break;
+    }
+    const ext = fileExt(file.name);
+    const kind = ATTACH_IMAGE_EXTS.includes(ext) ? 'image' : (ATTACH_DOC_EXTS.includes(ext) ? 'document' : null);
+    if (!kind) {
+      toast(`${file.name}: formato não aceito. Envie imagens, PDF, Word, Excel, PowerPoint ou textos.`, 'error');
+      continue;
+    }
+    const limit = kind === 'image' ? 20 : 50;
+    if (file.size > limit * 1024 * 1024) {
+      toast(`${file.name} passa de ${limit} MB.`, 'error');
+      continue;
+    }
+    const item = { localId: ++attachSeq, name: file.name, kind, size: file.size, status: 'uploading', preview: '' };
+    pendingAttachments.push(item);
+    if (kind === 'image') {
+      const reader = new FileReader();
+      reader.onload = () => { item.preview = reader.result; renderAttachTray(); };
+      reader.readAsDataURL(file);
+    }
+    uploadChatFile(item, file);
+  }
+  renderAttachTray();
+  chatInput.focus();
+}
+
+async function uploadChatFile(item, file) {
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const meta = await api('/api/chat/attachments', { method: 'POST', body: form });
+    if (!pendingAttachments.includes(item)) {
+      // Removed while uploading: discard it on the server too.
+      api(`/api/chat/attachments/${meta.id}`, { method: 'DELETE' }).catch(() => {});
+      return;
+    }
+    Object.assign(item, { id: meta.id, url: meta.url, mime: meta.mime, status: 'ready' });
+  } catch (err) {
+    item.status = 'error';
+    item.error = err.message;
+    toast(`Não consegui anexar ${item.name}: ${err.message}`, 'error');
+  }
+  renderAttachTray();
+}
+
+function removeAttachment(localId) {
+  const item = pendingAttachments.find(a => a.localId === localId);
+  pendingAttachments = pendingAttachments.filter(a => a.localId !== localId);
+  if (item && item.id) api(`/api/chat/attachments/${item.id}`, { method: 'DELETE' }).catch(() => {});
+  renderAttachTray();
+}
+
+function renderAttachTray() {
+  attachTray.innerHTML = '';
+  attachTray.hidden = pendingAttachments.length === 0;
+  for (const item of pendingAttachments) {
+    const chip = document.createElement('div');
+    chip.className = `attach-chip ${item.kind} ${item.status}`;
+    chip.title = item.status === 'error' ? `${item.name}: ${item.error || 'falhou'}` : item.name;
+    if (item.kind === 'image' && item.preview) {
+      const img = document.createElement('img');
+      img.src = item.preview;
+      img.alt = item.name;
+      chip.appendChild(img);
+    } else {
+      const ic = document.createElement('span');
+      ic.className = 'attach-icon';
+      ic.innerHTML = icon(item.kind === 'image' ? 'file' : 'file');
+      const ext = document.createElement('span');
+      ext.className = 'attach-ext';
+      ext.textContent = fileExt(item.name).slice(1, 5).toUpperCase();
+      ic.appendChild(ext);
+      chip.appendChild(ic);
+    }
+    const info = document.createElement('div');
+    info.className = 'attach-info';
+    const name = document.createElement('span');
+    name.className = 'attach-name';
+    name.textContent = item.name;
+    const meta = document.createElement('span');
+    meta.className = 'attach-meta';
+    meta.textContent = item.status === 'uploading' ? 'enviando…'
+      : item.status === 'error' ? 'falhou' : formatBytes(item.size);
+    info.append(name, meta);
+    chip.appendChild(info);
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'attach-remove';
+    rm.title = 'Remover anexo';
+    rm.setAttribute('aria-label', `Remover ${item.name}`);
+    rm.innerHTML = icon('x', 'ic ic-sm');
+    rm.addEventListener('click', () => removeAttachment(item.localId));
+    chip.appendChild(rm);
+    attachTray.appendChild(chip);
+  }
+  updateSendState();
+}
+
+function setupAttachmentDrop() {
+  const zone = document.querySelector('.chat-input-area') || chatForm;
+  const hint = $('dropHint');
+  let depth = 0;
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+  zone.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth += 1;
+    chatForm.classList.add('dragging');
+    hint.hidden = false;
+  });
+  zone.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  zone.addEventListener('dragleave', () => {
+    depth = Math.max(0, depth - 1);
+    if (!depth) { chatForm.classList.remove('dragging'); hint.hidden = true; }
+  });
+  zone.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    chatForm.classList.remove('dragging');
+    hint.hidden = true;
+    addChatFiles(e.dataTransfer.files);
+  });
+}
+
+function renderAttachments(list) {
+  const box = document.createElement('div');
+  box.className = 'msg-attachments';
+  for (const att of list || []) {
+    if (att.kind === 'image') {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'msg-thumb';
+      button.title = att.name;
+      const img = document.createElement('img');
+      img.src = att.url;
+      img.alt = att.name;
+      img.loading = 'lazy';
+      img.addEventListener('error', () => { button.classList.add('missing'); button.textContent = att.name; });
+      button.appendChild(img);
+      button.addEventListener('click', () => openLightbox(att.url, att.name));
+      box.appendChild(button);
+    } else {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'msg-file';
+      chip.title = `Abrir ${att.name} no programa do Windows`;
+      chip.innerHTML = `${icon('file')}<span class="msg-file-name"></span><span class="msg-file-meta"></span>`;
+      chip.querySelector('.msg-file-name').textContent = att.name;
+      chip.querySelector('.msg-file-meta').textContent = formatBytes(att.size);
+      chip.addEventListener('click', async () => {
+        try {
+          await api(`/api/chat/attachments/${att.id}/open`, { method: 'POST' });
+        } catch (err) {
+          toast(`Não consegui abrir: ${err.message}`, 'error');
+        }
+      });
+      box.appendChild(chip);
+    }
+  }
+  return box;
+}
+
+function openLightbox(url, name) {
+  $('lightboxImg').src = url;
+  $('lightboxImg').alt = name || '';
+  $('lightboxCaption').textContent = name || '';
+  $('imageLightbox').hidden = false;
+}
+
+function closeLightbox() {
+  $('imageLightbox').hidden = true;
+  $('lightboxImg').removeAttribute('src');
 }
 
 // ----------------- Sidebar -----------------
@@ -546,7 +778,11 @@ async function initVoice() {
         headers: {'Content-Type':'application/json'}, body: JSON.stringify({
           text: $('vicVoiceText').value.trim(), language: $('vicVoiceLang').value, emotion: $('vicVoiceEmotion').value
         }) });
-      if (!response.ok) throw new Error('Verifique o texto e a disponibilidade do motor de voz.');
+      if (!response.ok) {
+        let detail = 'Verifique o texto e a disponibilidade do motor de voz.';
+        try { detail = (await response.json()).detail || detail; } catch (_) { /* not JSON */ }
+        throw new Error(detail);
+      }
       const previous = player.src;
       player.src = URL.createObjectURL(await response.blob());
       if (previous.startsWith('blob:')) URL.revokeObjectURL(previous);
@@ -1178,7 +1414,9 @@ async function switchConversation(convId) {
 
     data.messages.forEach(m => {
       if (m.role === 'user' || m.role === 'assistant') {
-        renderMessage(m.role, m.content, m.sources, { reasoning: m.reasoning, reasoningSeconds: m.reasoning_seconds });
+        renderMessage(m.role, m.content, m.sources, {
+          reasoning: m.reasoning, reasoningSeconds: m.reasoning_seconds, attachments: m.attachments,
+        });
       }
     });
     scrollToBottom();
@@ -1194,14 +1432,20 @@ async function switchConversation(convId) {
 // ----------------- Messaging & Streaming -----------------
 async function sendMessage() {
   const text = chatInput.value.trim();
-  if (!text || isGenerating) return;
+  if (isGenerating) return;
+  if (pendingAttachments.some(a => a.status === 'uploading')) {
+    toast('Espere os anexos terminarem de subir.');
+    return;
+  }
+  const sentAttachments = pendingAttachments.filter(a => a.status === 'ready');
+  if (!text && !sentAttachments.length) return;
 
   if (!currentConversationId) {
     try {
       const conv = await api('/api/conversations', {
         method: 'POST',
         body: {
-          title: text.slice(0, 60),
+          title: (text || sentAttachments[0].name).slice(0, 60),
           project_id: currentProjectId,
           personality_id: currentPersonalityId,
         }
@@ -1217,8 +1461,12 @@ async function sendMessage() {
   chatInput.value = '';
   autoGrow();
   setEmptyState(false);
+  pendingAttachments = [];
+  renderAttachTray();
 
-  renderMessage('user', text);
+  renderMessage('user', text, null, {
+    attachments: sentAttachments.map(a => ({ id: a.id, name: a.name, kind: a.kind, size: a.size, url: a.url })),
+  });
   const assistantMsgEl = renderMessage('assistant', '');
   assistantMsgEl.classList.add('streaming');
   const body = assistantMsgEl.querySelector('.msg-body');
@@ -1259,6 +1507,7 @@ async function sendMessage() {
       body: JSON.stringify({
         conversation_id: currentConversationId,
         message: text,
+        attachments: sentAttachments.map(a => a.id),
         model: selectedModel || undefined,
         backend: currentBackend || undefined,
         project_id: currentProjectId,
@@ -1434,7 +1683,7 @@ function abortGeneration(silent = false) {
   }
 }
 
-function renderMessage(role, content, sources = null, { reasoning = '', reasoningSeconds = null } = {}) {
+function renderMessage(role, content, sources = null, { reasoning = '', reasoningSeconds = null, attachments = null } = {}) {
   const msg = document.createElement('div');
   msg.className = `message ${role}`;
   const bubble = document.createElement('div');
@@ -1443,8 +1692,9 @@ function renderMessage(role, content, sources = null, { reasoning = '', reasonin
   actions.className = 'msg-actions';
 
   if (role === 'user') {
+    if (attachments && attachments.length) msg.appendChild(renderAttachments(attachments));
     bubble.textContent = content;
-    msg.appendChild(bubble);
+    if (content) msg.appendChild(bubble);
     msg.appendChild(actions);
   } else {
     const avatar = document.createElement('div');
@@ -1766,13 +2016,14 @@ async function handleFileUpload(e) {
   e.target.value = '';
   if (!file) return;
 
-  const ext = (file.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
-  if (!['.pdf', '.txt', '.md'].includes(ext)) {
-    toast('Formato não suportado. Use PDF, TXT ou MD.', 'error');
+  const ext = fileExt(file.name);
+  const allowed = ['.pdf', '.txt', '.md', '.docx', '.epub', '.xlsx', '.xlsm', '.xls', '.pptx', '.csv', '.tsv'];
+  if (!allowed.includes(ext)) {
+    toast('Formato não suportado. Use PDF, Word, Excel, PowerPoint, EPUB, CSV, TXT ou MD.', 'error');
     return;
   }
-  if (file.size > 25 * 1024 * 1024) {
-    toast('Arquivo maior que 25 MB.', 'error');
+  if (file.size > 50 * 1024 * 1024) {
+    toast('Arquivo maior que 50 MB.', 'error');
     return;
   }
 

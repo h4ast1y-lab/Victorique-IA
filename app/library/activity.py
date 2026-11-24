@@ -25,9 +25,15 @@ AGENT_TOOLS = {
     "Read": "read", "NotebookRead": "read",
     "Write": "write", "Edit": "write", "MultiEdit": "write", "NotebookEdit": "write",
     "Glob": "list", "Grep": "list", "LS": "list",
+    "mcp__victorique__ler_documento": "read",
+    "mcp__victorique__editar_word": "write", "mcp__victorique__editar_planilha": "write",
+    "mcp__victorique__editar_pdf": "write", "mcp__victorique__criar_documento": "write",
 }
 # Tools of the app's own registry (organizer tools are recorded by the organizer).
-REGISTRY_TOOLS = {"read_file": "read", "list_directory": "list", "search_files": "list", "write_file": "write"}
+REGISTRY_TOOLS = {
+    "read_file": "read", "list_directory": "list", "search_files": "list", "write_file": "write",
+    "edit_word": "write", "edit_spreadsheet": "write", "edit_pdf": "write", "create_document": "write",
+}
 
 _lock = threading.Lock()
 _events: Deque[Dict[str, Any]] = deque(maxlen=KEEP)

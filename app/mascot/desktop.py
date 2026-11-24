@@ -227,11 +227,13 @@ class DesktopMascot:
                 self._dragging = True
                 self._drag_trail.clear()
                 self.brain.grab(self.clock())
-                self.window.hide_cursor(True)
+                # The real arrow stays: her hand (the anchor) hangs from its tip.
+                self.window.hand_cursor = False
+                self.window.hide_cursor(False)
             if self._dragging:
-                # The frames hold a drawn cursor whose tip is her anchor.
-                self.brain.drag_to(cx, cy)
-                self._drag_trail.append((self.clock(), cx, cy))
+                now = self.clock()
+                self.brain.drag_to(cx, cy, now)
+                self._drag_trail.append((now, cx, cy))
             return
         target = self._hit(x, y)
         hover = target[1] if target and target[0] == "button" else None

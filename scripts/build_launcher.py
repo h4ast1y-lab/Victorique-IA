@@ -1,4 +1,4 @@
-"""
+r"""
 Gera ``Victorique.exe`` (launcher com o ícone da Victorique) na pasta do projeto.
 
 Uso, na pasta do projeto:

@@ -3,9 +3,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.security.path_guard import ensure_not_hardlinked, path_guard
 
 MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MB safety cap for raw text files
-MAX_DOC_BYTES = 50 * 1024 * 1024  # 50 MB safety cap for paged documents (PDF/EPUB/DOCX)
+MAX_DOC_BYTES = 50 * 1024 * 1024  # 50 MB safety cap for paged documents (PDF/EPUB/Office)
 DEFAULT_PAGES_PER_READ = 3
-_PAGED_EXTS = {".pdf", ".epub", ".docx"}
+# Office files (Word, Excel, PowerPoint, CSV) are paged by app/tools/office.py.
+_OFFICE_EXTS = {".docx", ".xlsx", ".xlsm", ".xls", ".pptx", ".csv", ".tsv"}
+_PAGED_EXTS = {".pdf", ".epub"} | _OFFICE_EXTS
 
 
 def list_directory(path: str = ".") -> Dict[str, Any]:
@@ -153,14 +155,15 @@ def _read_paged_document(
     if ext == ".pdf":
         return _extract_pdf_pages(resolved, start_page, end_page, query, max_chars)
 
-    from app.rag.document_loader import document_loader
+    if ext in _OFFICE_EXTS:
+        from app.tools import office
 
-    raw_pages = (
-        document_loader._load_epub(resolved)
-        if ext == ".epub"
-        else document_loader._load_docx(resolved)
-    )
-    pages = [(int(p["page"]), p["text"]) for p in raw_pages]
+        pages, unit = office.document_pages(resolved)
+    else:
+        from app.rag.document_loader import document_loader
+
+        pages = [(int(p["page"]), p["text"]) for p in document_loader._load_epub(resolved)]
+        unit = "Seção"
     total_pages = len(pages)
 
     if query and query.strip():
@@ -171,7 +174,8 @@ def _read_paged_document(
             "total_pages": total_pages,
             "query": query,
             "matches": matches,
-            "content": content or f"Nenhuma ocorrência de '{query}' encontrada.",
+            "content": (content or f"Nenhuma ocorrência de '{query}' encontrada.").replace(
+                "[Página ", f"[{unit} "),
             "truncated": matches > 10 or len(content) >= max_chars,
         }
 
@@ -187,11 +191,16 @@ def _read_paged_document(
     sp = max(1, min(int(start_page or 1), total_pages))
     ep = max(sp, min(int(end_page or (sp + DEFAULT_PAGES_PER_READ - 1)), total_pages))
     parts = [
-        f"--- Seção {p_num}/{total_pages} ---\n{p_txt}"
+        f"--- {unit} {p_num}/{total_pages} ---\n{p_txt}"
         for p_num, p_txt in pages[sp - 1 : ep]
     ]
     joined = "\n\n".join(parts)
     truncated = len(joined) > max_chars or ep < total_pages
+    hint = f"Use start_page/end_page para ler outras partes ({unit.lower()}s) ou query para buscar termos."
+    if ext == ".docx":
+        hint += " Os marcadores [¶n] numeram os parágrafos para edit_word."
+    elif ext in (".xlsx", ".xlsm", ".xls", ".csv", ".tsv"):
+        hint += " Colunas em letras e linhas numeradas, como no Excel, para edit_spreadsheet."
     return {
         "file_path": str(resolved),
         "format": ext.lstrip("."),
@@ -200,7 +209,7 @@ def _read_paged_document(
         "end_page": ep,
         "content": joined[:max_chars],
         "truncated": truncated,
-        "hint": "Use start_page/end_page para ler outras seções ou query para buscar termos.",
+        "hint": hint,
     }
 
 
@@ -218,6 +227,12 @@ def read_file(
     ext = resolved.suffix.lower()
     size = resolved.stat().st_size
     max_chars = max(100, min(int(max_chars), 100000))
+
+    from app.tools.office import unsupported_hint
+
+    hint = unsupported_hint(ext)
+    if hint:
+        raise ValueError(hint)
 
     if ext in _PAGED_EXTS:
         if size > MAX_DOC_BYTES:

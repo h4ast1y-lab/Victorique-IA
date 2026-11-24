@@ -56,6 +56,7 @@ class Sheet:
     ref: Tuple[int, ...] = (0,)   # frame(s) whose height is her standing height
     ref_height: Optional[float] = None   # or that height given directly (sheet px)
     shadow: bool = False
+    main_only: bool = False  # keep only each frame's biggest part (drops effect marks)
 
 
 SHEETS: List[Sheet] = [
@@ -85,6 +86,18 @@ SHEETS: List[Sheet] = [
     Sheet("glance", "18-olhar.webp", 1, 6, "alpha"),
     Sheet("think", "19-pensar.webp", 1, 6, "alpha"),
     Sheet("doze", "20-cochilar.webp", 1, 6, "alpha"),
+    # Second batch (2026-11-24): expressions and reactions. Generated over
+    # white and cut out, so they are flood-filled like the white sheets.
+    Sheet("happy", "21-feliz.webp", 1, 6, "white", white_low=215),
+    Sheet("point", "22-apontar.webp", 1, 6, "white", white_low=215),
+    Sheet("confused", "23-confusa.webp", 1, 6, "white", white_low=215),
+    Sheet("surprised", "24-surpresa.webp", 1, 6, "white", white_low=215),
+    Sheet("sigh", "25-suspirar.webp", 1, 8, "white", white_low=215),
+    Sheet("wake", "26-despertar.webp", 1, 8, "white", white_low=215),
+    # Stamping her feet; frames 3-5 are in the air, so the floor line is the
+    # sheet's own (the motion marks under her feet are dropped).
+    Sheet("tantrum", "27-birra.webp", 1, 8, "white", white_low=215, facing="right",
+          main_only=True),
 ]
 
 
@@ -169,6 +182,36 @@ def drop_specks(mask: np.ndarray) -> np.ndarray:
     return mask & full
 
 
+def biggest_part(mask: np.ndarray) -> np.ndarray:
+    """The largest connected part of `mask` (labelled on the pooled grid)."""
+    h, w = mask.shape
+    ph, pw = h // POOL, w // POOL
+    if not ph or not pw:
+        return mask
+    pooled = mask[: ph * POOL, : pw * POOL].reshape(ph, POOL, pw, POOL).any(axis=(1, 3))
+    lab, n = label(pooled)
+    if n <= 1:
+        return mask
+    sizes = np.bincount(lab.ravel(), minlength=n + 1)
+    sizes[0] = 0
+    kept = lab == int(np.argmax(sizes))
+    full = np.zeros_like(mask)
+    full[: ph * POOL, : pw * POOL] = np.repeat(np.repeat(kept, POOL, axis=0), POOL, axis=1)
+    return mask & full
+
+
+def dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    out = mask.copy()
+    for _ in range(radius):
+        grown = out.copy()
+        grown[1:] |= out[:-1]
+        grown[:-1] |= out[1:]
+        grown[:, 1:] |= out[:, :-1]
+        grown[:, :-1] |= out[:, 1:]
+        out = grown
+    return out
+
+
 def cuts(profile: np.ndarray, parts: int, window: int) -> List[int]:
     """Boundaries splitting `profile` into `parts`, each moved to the emptiest
     position within `window` of the even grid."""
@@ -208,16 +251,16 @@ def frames_of(sheet: Sheet) -> List[List[Frame]]:
         row: List[Frame] = []
         for c in range(sheet.cols):
             x0, x1 = col_cuts[c], col_cuts[c + 1]
-            cell = band[:, x0:x1]
+            cell = band[:, x0:x1].copy()
+            if sheet.main_only:
+                cell &= biggest_part(cell)
             ys, xs = np.nonzero(cell)
             if not len(ys):
                 raise SystemExit(f"{sheet.file}: empty frame at row {r}, column {c}")
             bx0, bx1 = x0 + xs.min(), x0 + xs.max() + 1
             by0, by1 = y0 + ys.min(), y0 + ys.max() + 1
-            crop_mask = mask[by0:by1, bx0:bx1].copy()
-            # keep only this cell's columns (a neighbour may poke into the box)
-            crop_mask[:, : max(0, x0 - bx0)] = False
-            crop_mask[:, max(0, x1 - bx0):] = False
+            # only this cell's pixels (a neighbour may poke into the box)
+            crop_mask = cell[ys.min():ys.max() + 1, xs.min():xs.max() + 1].copy()
             pixels = rgba[by0:by1, bx0:bx1].copy()
             pixels[..., 3] = np.where(crop_mask, 255, 0)
             image = Image.fromarray(pixels.astype("uint8"), "RGBA")
@@ -235,6 +278,14 @@ def extent(mask: np.ndarray, rows: slice) -> Tuple[float, float]:
 
 def cursor_tip(frame: Frame) -> Tuple[float, float]:
     """Top vertex of the white arrow cursor drawn in the dragged sheet."""
+    ys, xs = np.nonzero(cursor_patch(frame))
+    top = ys.min()
+    x = xs[ys <= top + 2].min()
+    return float(x) - 2.0, float(top) - 3.0
+
+
+def cursor_patch(frame: Frame) -> np.ndarray:
+    """The white inside of the arrow cursor drawn in the dragged sheet."""
     px = np.asarray(frame.image).astype(np.int16)
     rgb = px[..., :3]
     white = (rgb.min(-1) >= 238) & ((rgb.max(-1) - rgb.min(-1)) <= 10) & frame.mask
@@ -246,10 +297,45 @@ def cursor_tip(frame: Frame) -> Tuple[float, float]:
     # The arrow's inside is the biggest white patch (cuffs and frills are small).
     sizes = np.bincount(lab.ravel(), minlength=n + 1)
     sizes[0] = 0
-    ys, xs = np.nonzero(lab == int(np.argmax(sizes)))
-    top = ys.min()
-    x = xs[ys <= top + 2].min()
-    return float(x) - 2.0, float(top) - 3.0
+    return lab == int(np.argmax(sizes))
+
+
+def erase_cursor(frame: Frame) -> Frame:
+    """The dragged frame without its drawn arrow cursor.
+
+    The app shows the real cursor at the anchor instead, so she can be
+    mirrored when pulled to the left (a mirrored arrow would look wrong)."""
+    arrow = cursor_patch(frame)
+    px = np.asarray(frame.image).astype(np.int16)
+    ys, xs = np.nonzero(arrow)
+    tip_y = int(ys.min())
+    tip_x = int(xs[ys <= tip_y + 2].min())
+    # The arrow's outline (and its soft edge) is everything right next to its
+    # white inside. Her hand ends at the tip: beside the hand nothing left of
+    # the tip goes; below it, the outline of the arrow's straight left side.
+    erase = dilate(arrow, 11)
+    hand_rows = slice(0, tip_y + 14)
+    erase[hand_rows, : max(0, tip_x - 1)] = False
+    erase[tip_y + 14:, : max(0, tip_x - 8)] = False
+    mask = frame.mask & ~erase
+    # Crumbs of the outline left out of reach: small parts in the arrow's
+    # corner (below and right of the tip). Marks over her head stay.
+    h, w = mask.shape
+    lab, n = label(mask)
+    if n > 1:
+        sizes = np.bincount(lab.ravel(), minlength=n + 1)
+        sizes[0] = 0
+        main = int(np.argmax(sizes))
+        for part in range(1, n + 1):
+            if part == main:
+                continue
+            pys, pxs = np.nonzero(lab == part)
+            if pxs.min() >= tip_x - 12 and pys.min() >= tip_y - 6:
+                mask[lab == part] = False
+    pixels = px.copy()
+    pixels[..., 3] = np.where(mask, 255, 0)
+    image = Image.fromarray(pixels.astype("uint8"), "RGBA")
+    return Frame(image, frame.box, mask)
 
 
 def seat_line(mask: np.ndarray) -> float:
@@ -305,6 +391,8 @@ def build(debug: Optional[Path] = None) -> Dict:
             base = max(f.box[3] for f in row)
             for f in row:
                 ax, ay = anchor(sheet, f, base)
+                if sheet.anchor_x == "cursor":
+                    f = erase_cursor(f)
                 w = max(1, round(f.image.width * scale))
                 h = max(1, round(f.image.height * scale))
                 small = f.image.resize((w, h), Image.LANCZOS)

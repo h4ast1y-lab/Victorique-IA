@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import List, Dict, Any, Optional
+from app.core.attachments import history_note
 from app.config import settings
 from app.core.avatar_protocol import AVATAR_INSTRUCTIONS
 from app.core.dialogue_style import style_note
@@ -159,7 +160,7 @@ class ContextBuilder:
         limit = max(1, int(settings.max_history_messages))
         valid_history = [
             m for m in conversation_history
-            if m.get("role") in ("user", "assistant") and m.get("content")
+            if m.get("role") in ("user", "assistant") and (m.get("content") or m.get("attachments"))
         ]
 
         if len(valid_history) > limit:
@@ -183,6 +184,8 @@ class ContextBuilder:
             content = m["content"]
             if m["role"] == "assistant" and m.get("tool_trace"):
                 content = _tool_trace_note(m["tool_trace"]) + "\n\n" + content
+            if m["role"] == "user" and m.get("attachments"):
+                content = (content + "\n" + history_note(m["attachments"])).strip()
             formatted_messages.append({
                 "role": m["role"],
                 "content": content

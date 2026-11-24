@@ -17,6 +17,12 @@ logger = logging.getLogger("claude_code.permissions")
 
 # Tools that write to a file given in file_path / notebook_path.
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+# Victorique's own document tools: the original always goes to the Reserva first,
+# and a protected source (a chat attachment) is copied, never touched.
+DOCUMENT_TOOLS = {
+    "mcp__victorique__editar_word", "mcp__victorique__editar_planilha",
+    "mcp__victorique__editar_pdf", "mcp__victorique__criar_documento",
+}
 TARGET_KEYS = ("file_path", "notebook_path", "command", "url", "query", "path", "pattern")
 MAX_TARGET_CHARS = 200
 
@@ -26,6 +32,10 @@ FRIENDLY_TOOLS = {
     "mcp__victorique__mover_arquivos": "mover arquivos (plano em lote)",
     "mcp__victorique__renomear": "renomear um item",
     "mcp__victorique__mandar_para_reserva": "mandar itens para a Reserva (_Quarentena)",
+    "mcp__victorique__editar_word": "editar um documento Word",
+    "mcp__victorique__editar_planilha": "editar uma planilha",
+    "mcp__victorique__editar_pdf": "editar um PDF",
+    "mcp__victorique__criar_documento": "criar um documento",
 }
 
 
@@ -87,6 +97,22 @@ class PermissionBridge:
                     resource=target,
                     authorized=True,
                     details="Claude Code: aprovado automaticamente (modo turbo)",
+                )
+                return PermissionResultAllow(updated_input=input_data)
+
+        if tool_name in DOCUMENT_TOOLS:
+            output = input_data.get("output_path")
+            if output and path_guard.is_protected(str(output)):
+                return PermissionResultDeny(
+                    message="Caminho de saída protegido (código, dados do app ou sistema). Escolha outro."
+                )
+            if settings.turbo_mode:
+                security_manager.log_action(
+                    action_type=tool_name,
+                    category=ActionCategory.REQUIRES_AUTH,
+                    resource=target,
+                    authorized=True,
+                    details="Claude Code: documento editado sem perguntar (modo turbo; original na Reserva)",
                 )
                 return PermissionResultAllow(updated_input=input_data)
 

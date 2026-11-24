@@ -10,6 +10,7 @@ from app.models.llama_cpp_client import llama_cpp_client
 from app.models.llama_cpp_server_client import llama_cpp_server
 from app.tools.registry import tool_registry
 from app.config import settings, DEFAULT_LLAMA_CPP_MODEL
+from app.core import attachments as chat_attachments
 from app.voice import tts_engine
 from app.models.events import ReasoningDelta
 from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
@@ -129,6 +130,26 @@ def _parse_text_tool_call(text: str) -> Optional[Dict[str, Any]]:
         return None
     return {"function": {"name": name, "arguments": arguments}}
 
+
+def _attach_to_last_user_message(messages: List[Dict[str, Any]], files: List[Dict[str, Any]],
+                                 backend_name: str) -> None:
+    """Local models: the attachments' note (and, for Ollama, the images) on this turn's message."""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        pictures = chat_attachments.images(files)
+        inline = backend_name == "ollama" and bool(pictures)
+        note = chat_attachments.prompt_note(files, images_inline=inline)
+        if pictures and not inline:
+            note += ("\n(Este motor local não recebe imagens: diga ao usuário que, para ver a "
+                     "imagem, use o modo Claude Code ou um modelo do Ollama com visão.)")
+        # The history line "[anexos: ...]" is replaced by the full note.
+        short = chat_attachments.history_note([chat_attachments.public(f) for f in files])
+        content = (message.get("content") or "").replace(short, "").strip()
+        message["content"] = (content + "\n\n" + note).strip()
+        if inline:
+            message["images"] = [chat_attachments.image_base64(f)[1] for f in pictures]
+        return
 
 class AssistantEngine:
     def _save_assistant_message(
@@ -264,6 +285,7 @@ class AssistantEngine:
         personality_id: Optional[str] = None,
         enable_rag: bool = True,
         deep_thinking: bool = False,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Orchestrates one conversation turn and yields SSE JSON events:
@@ -284,11 +306,13 @@ class AssistantEngine:
         If the client disconnects, the underlying Ollama stream is closed and
         the partial answer is persisted with an explicit cancellation marker.
         """
-        # Save user message immediately
+        # Save user message immediately (attachments: rows from app/core/attachments.bind)
+        files = list(attachments or [])
         conversation_store.add_message(
             conversation_id=conversation_id,
             role="user",
-            content=user_message
+            content=user_message,
+            attachments=[chat_attachments.public(f) for f in files],
         )
 
         if (backend or "").strip().lower() == "claude-code":
@@ -302,7 +326,7 @@ class AssistantEngine:
                 return
             async for chunk in claude_code_backend.run_turn(
                 conversation_id, user_message, project_id, personality_id,
-                deep_thinking=deep_thinking,
+                deep_thinking=deep_thinking, attachments=files,
             ):
                 yield chunk
             return
@@ -311,7 +335,7 @@ class AssistantEngine:
             from app.codex.backend import codex_backend
             async for chunk in codex_backend.run_turn(
                 conversation_id, user_message, project_id, personality_id,
-                deep_thinking=deep_thinking,
+                deep_thinking=deep_thinking, attachments=files,
             ):
                 yield chunk
             return
@@ -328,9 +352,9 @@ class AssistantEngine:
         # Quando o backend é llama-cpp-server, o modelo deve ser o caminho
         # do GGUF (ou o nome registrado no servidor), não o nome do Ollama.
         if backend_name in ("llama-cpp", "llama-cpp-server"):
-            selected_model = settings.llama_cpp_model_path or str(
-                DEFAULT_LLAMA_CPP_MODEL if 'DEFAULT_LLAMA_CPP_MODEL' in dir() else ""
-            )
+            # (dir() inside a method only lists locals, so the old guard
+            # always fell back to "" instead of the default model.)
+            selected_model = settings.llama_cpp_model_path or str(DEFAULT_LLAMA_CPP_MODEL or "")
 
         if use_llama_cpp_server and not llama_cpp_server.available:
             # Se o backend nao foi explicitamente escolhido pelo usuario,
@@ -395,6 +419,8 @@ class AssistantEngine:
                 personality_id=personality_id,
                 enable_rag=enable_rag
             )
+            if files:
+                _attach_to_last_user_message(ctx["messages"], files, backend_name)
 
             sources = ctx["sources"]
             if sources:
