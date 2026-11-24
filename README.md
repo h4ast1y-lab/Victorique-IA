@@ -293,7 +293,8 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
 | Memórias explícitas (global/projeto), editar/desativar/excluir | implementado; testado |
 | Casos (antes Projetos) independentes, com arquivamento, + exclusão em cascata | implementado; testado (inclui remoção do arquivo) |
 | Organizador: mover em lote, renomear, Reserva e Desfazer | implementado; testado automaticamente e no navegador |
-| Retrato com clipes por estado (acordada, dormindo, ouvindo, pensando, falando, erro) | implementado; clipes do usuário em `data/clips/<estado>/` (mp4, webm, gif, png, jpg, webp); sem clipe, retrato estático; cachimbo no estado pensando |
+| Victorique em miniatura andando pela área de trabalho (anda, lê, cochila, fuma o cachimbo, fala pelo balão; arrastar, clique, dois cliques, menu) | implementado (seção 14); substitui o antigo retrato com clipes |
+| Expressões e gestos escolhidos pelo modelo (`[expression:ID]`, `[gesture:ID]`, ocultos no texto) | implementado nos dois modos; protocolo adaptado do Victorique-IA-2 |
 | RAG PDF/TXT/MD com documento/página | implementado; testado com embeddings reais |
 | Isolamento por projeto (conversas, memórias, documentos, RAG) | implementado; testado automaticamente e no E2E |
 | Referências às fontes | implementado; testado |
@@ -333,6 +334,9 @@ curl -X POST http://127.0.0.1:8765/api/backup/restore -H "Content-Type: applicat
   `POST /api/llama-cpp-server/stop`
 - `POST /api/life/tick`, `GET /api/life/status`, `POST /api/life/silence`,
   `POST /api/life/resume`, `POST /api/life/test` (vida própria, seção 13)
+- `GET /api/avatar/manifest`, `GET /api/mascot/status`, `POST /api/mascot/signal`,
+  `POST /api/mascot/say`, `POST /api/mascot/reply`, `POST /api/mascot/command`
+  (Victorique na área de trabalho, seção 14)
 - `GET /api/ping` (responde na hora, sem checar backends; usado pelo `run.py`)
 - `GET /api/claude-code/status` (SDK instalado, caminho do `claude.exe`, pasta de
   trabalho, modelo e último erro)
@@ -383,6 +387,8 @@ app/
   models/     ollama_client.py, llama_cpp_client.py, llama_cpp_server_client.py
   voice/      __init__.py   (TTS pyttsx3/SAPI5 + STT SpeechRecognition/Sphinx)
   memory/     database.py, conversation_store.py, memory_store.py, project_store.py
+  life/       observer.py, policy.py, folders.py, lines.py, generator.py, service.py
+  mascot/     sprite.py, behavior.py, balloon.py, win32.py, desktop.py, bus.py, launcher.py
   rag/        document_loader.py, text_splitter.py, vector_store.py
   security/   path_guard.py, permissions.py
   tools/      registry.py, file_tools.py, system_tools.py, web_search.py
@@ -499,7 +505,8 @@ pastas protegidas do app.
 ## 13. Vida própria
 
 A Victorique puxa assunto sozinha, de vez em quando. Tudo fica em **Configurações → Vida
-própria**, e o ícone de lua no retrato liga o **não perturbar**.
+própria**, e o ícone de lua na barra lateral (ou o menu dela na área de trabalho) liga o
+**não perturbar**.
 
 - **Tédio:** depois de 20 a 45 minutos (sorteado; configurável) sem você falar com ela,
   e com você no computador, ela propõe um enigma, uma pergunta para investigar ou uma
@@ -531,7 +538,9 @@ própria**, e o ícone de lua no retrato liga o **não perturbar**.
 - **Voz:** **Falar em voz alta** lê as falas com a voz do app (desligado por padrão).
 
 Como funciona: a interface pergunta ao servidor a cada 20 s (`POST /api/life/tick`) e
-envia o próprio estado (digitando, respondendo, janela visível). O servidor
+envia o próprio estado (digitando, respondendo, janela visível). Com a Victorique na
+área de trabalho, a fala vai para o balão dela (e a janela escondida não a cala, já que
+o balão continua à vista); sem ela, o balão aparece na própria página. O servidor
 (`app/life/`) decide tudo antes de chamar qualquer modelo: `observer.py` lê os sinais do
 Windows, `policy.py` aplica os portões e os gatilhos, `generator.py` escreve a fala e
 `service.py` a entrega num pedido seguinte, conferindo os portões de novo.
@@ -541,3 +550,56 @@ a pasta bagunçada de teste gerou o comentário, o tédio de teste abriu o Caso 
 pergunta no campo, e o «Silêncio» e o não perturbar bloquearam as falas; com o Claude
 Code real, o tédio saiu ligado a um Caso aberto (10 s, primeira chamada) e o comentário
 da pasta levou 2 s.
+
+---
+
+## 14. Victorique na área de trabalho
+
+No aplicativo de desktop (`run.bat`), a Victorique em miniatura vive sobre a barra de
+tarefas: passeia, para, senta para ler e vira as páginas, fuma o cachimbo, toma chá,
+ajeita o cabelo e cochila quando você some. Ela substitui o antigo retrato com clipes
+da barra lateral; ali ficou só uma linha com o estado dela e a lua do não perturbar.
+
+- **Com o mouse:** arraste-a para qualquer lugar (ela esperneia e cai de volta na barra
+  de tarefas do monitor onde for solta); um clique dá uma reação; dois cliques abrem a
+  conversa; o botão direito abre o menu (abrir a conversa, ficar parada, Silêncio de
+  2 horas, não perturbar, esconder, encerrar o assistente).
+- **Estados:** pensando, ela para e acende o cachimbo; falando, mexe a boca; ouvindo,
+  inclina a cabeça; erro, fica preocupada; sem interação (minutos configuráveis),
+  senta e dorme com «z z z».
+- **Expressões do modelo:** nos dois modos, a resposta final pode começar com
+  marcadores ocultos `[expression:ID]` e `[gesture:ID]` (IDs fixos, ver
+  `GET /api/avatar/manifest`). Eles saem do texto antes de salvar, mostrar ou ler em voz
+  alta e mudam o rosto dela por 22 s. No modo local, um marcador antes de uma chamada de
+  ferramenta em JSON não atrapalha a detecção da ferramenta.
+- **Balão:** as falas da vida própria (com «Aceitar o Caso» e «Silêncio») aparecem
+  acima dela, mesmo com a janela fechada. Se uma resposta termina com a conversa fora da
+  frente, ela mostra o começo da resposta com «Abrir a conversa».
+- **Fechar a janela** só esconde a conversa (configurável): o assistente continua
+  rodando com ela na tela. Para sair de vez, use «Encerrar o assistente» no menu dela.
+- **Tela cheia:** com um jogo, vídeo ou apresentação em tela cheia na frente, ela some
+  e volta depois.
+- **Configurações → Na área de trabalho:** mostrar ou esconder, tamanho (90 a 240 px),
+  passear, avisar respostas, sumir em tela cheia e o comportamento ao fechar a janela.
+  Para desligar no arranque, use `ASSISTANT_MASCOT=0`.
+
+Como funciona: ela é desenhada em código com o Pillow (`app/mascot/sprite.py`, sem
+imagens) e mostrada numa janela Win32 em camadas com alfa por pixel
+(`app/mascot/win32.py`). Os pixels transparentes deixam os cliques passarem para o que
+estiver atrás. Uma janela transparente do pywebview foi testada e pinta o fundo de
+cinza no WebView2, por isso não foi usada. O comportamento (`behavior.py`) é lógica
+pura; `desktop.py` junta tudo na thread da janela, e `bus.py` liga a API da conversa a
+ela no mesmo processo. No navegador (`--browser`) ela não aparece e os balões ficam na
+página.
+
+Origem: o protocolo de expressões e gestos (`app/core/avatar_protocol.py`), o parser
+que tira os marcadores do fluxo e o ritmo de piscadas e gestos vêm do projeto irmão
+[Victorique-IA-2](https://github.com/Nyzius/Victorique-IA-2), feito sobre esta mesma
+base. O retrato em CSS de lá não foi usado: a figura aqui é outra, de corpo inteiro.
+
+Verificação em 23/11/2026: testes automatizados (`tests/test_mascot.py`,
+`tests/test_avatar_protocol.py` e dois casos novos em `tests/test_claude_backend.py`).
+Na área de trabalho real: a transparência e os cliques atravessando os pixels vazios, a
+caminhada, o cachimbo, a queda depois de arrastada e o balão. No app completo
+(`run.py`): a fala chegou ao balão, fechar a janela só a escondeu, e «Aceitar o Caso»
+no balão reabriu a conversa com o Caso criado.

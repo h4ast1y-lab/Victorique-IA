@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   checkHealth();
   loadModels();
   await initVoice();
-  initPortrait();
+  initVisualState();
   initLife();
   authPollTimer = setInterval(checkPendingAuthorizations, 5000);
   setInterval(checkHealth, 30000);
@@ -282,6 +282,7 @@ function savePref(name, value, { immediate = false } = {}) {
   applyAppearance();
   if (name === 'user_name') updateUserLabel();
   if (name.startsWith('life_')) updateLifeControls();
+  if (name.startsWith('mascot_')) setTimeout(loadMascotStatus, 2600);
   clearTimeout(prefSaveTimer);
   prefSaveTimer = setTimeout(flushPrefs, immediate ? 0 : 600);
 }
@@ -316,7 +317,6 @@ function applyAppearance() {
   messagesList.classList.toggle('hide-reasoning', prefs.show_reasoning === false);
   messagesList.classList.toggle('hide-tools', prefs.show_tool_events === false);
   $('suggestions').classList.toggle('on', prefs.show_suggestions !== false);
-  $('portrait').hidden = prefs.show_portrait === false;
   chatInput.placeholder = prefs.enter_to_send === false
     ? 'Escreva sua mensagem (Ctrl+Enter envia)'
     : `Pergunte qualquer coisa a ${activeProfileName()}`;
@@ -646,7 +646,6 @@ function updateProfileUi() {
   $('profilePillName').textContent = p ? p.name : '—';
   $('welcomeAvatar').textContent = av;
   $('brandAvatar').textContent = av;
-  $('portraitMark').textContent = av;
   $('brandName').textContent = p ? p.name : 'Victorique';
   $('composerNote').textContent = `${p ? p.name : 'A assistente'} pode errar. Confira informações importantes.`;
   document.title = p ? p.name : 'Victorique';
@@ -1175,6 +1174,8 @@ async function sendMessage() {
           scrollToBottom(true);
         } else if (data.type === 'notice') {
           appendToolEvent(toolBox, `${data.message}`, 'tool-event-notice');
+        } else if (data.type === 'avatar') {
+          sendMascotSignal({ expression: data.expression || null, gesture: data.gesture || null });
         } else if (data.type === 'token') {
           if (!visual.streaming) { visual.streaming = true; refreshVisualState(); }
           accumulated += data.content || '';
@@ -1212,6 +1213,7 @@ async function sendMessage() {
     visual.streaming = false;
     if (accumulated && prefs.tts_speak_responses && ttsAvailable) markSpeaking(accumulated);
     refreshVisualState();
+    if (accumulated && !aborted) tellMascotReply(accumulated);
     activeAbortController = null;
     assistantMsgEl.classList.remove('streaming');
     if (bubble.querySelector('.thinking')) bubble.innerHTML = '';
@@ -2008,10 +2010,11 @@ window.assistantApp = {
 };
 
 
-// ----------------- Portrait: one clip per state -----------------
-// Clips come from data/clips/<estado>/ (supplied by the user, never downloaded).
-// Without a clip for a state, the "acordada" clip is used; without any, the
-// static portrait. Priority: ouvindo > pensando > falando > erro > dormindo.
+// ----------------- Her state: sidebar strip + desktop mascot -----------------
+// The miniature Victorique lives on the desktop (app/mascot, run by run.py).
+// This page computes her operational state, shows it in the sidebar and
+// forwards it, plus the model's [expression]/[gesture] picks, to the mascot.
+// Priority: ouvindo > pensando > falando > erro > dormindo.
 const PIPE_SVG = `<svg class="pipe" viewBox="0 0 48 48" aria-hidden="true">
   <path class="pipe-smoke s1" d="M31 21c-3-3 3-5 0-8s3-5 0-8"/>
   <path class="pipe-smoke s2" d="M35 22c-2-3 2-4 0-7s2-4 0-6"/>
@@ -2024,9 +2027,10 @@ const STATE_LABELS = {
 };
 const ERROR_HOLD_MS = 60000;
 const visual = {
-  state: null, clips: {}, generating: false, streaming: false, listening: false,
+  state: null, generating: false, streaming: false, listening: false,
   speakingUntil: 0, errorAt: 0, lastActivity: Date.now(),
 };
+const mascot = { running: false, active: false };
 
 function computeVisualState() {
   const now = Date.now();
@@ -2043,46 +2047,21 @@ function refreshVisualState() {
   const state = computeVisualState();
   if (state === visual.state) return;
   visual.state = state;
-  $('portrait').dataset.state = state;
-  $('portraitState').textContent = STATE_LABELS[state];
-  showClip(state);
+  $('vicStatus').dataset.state = state;
+  $('vicState').textContent = STATE_LABELS[state];
+  sendMascotSignal({ state });
 }
 
-function pickClip(state) {
-  const own = visual.clips[state] || [];
-  const list = own.length ? own : (visual.clips.acordada || []);
-  if (!list.length) return null;
-  const clip = list[Math.floor(Math.random() * list.length)];
-  return { ...clip, state: own.length ? state : 'acordada' };
+function sendMascotSignal(body) {
+  if (!mascot.running) return;
+  api('/api/mascot/signal', { method: 'POST', body }).catch(() => {});
 }
 
-function showClip(state) {
-  const video = $('portraitVideo');
-  const image = $('portraitImage');
-  const clip = pickClip(state);
-  const src = clip ? `/api/clips/${clip.state}/${encodeURIComponent(clip.name)}` : '';
-  if (clip && clip.kind === 'video') {
-    image.hidden = true;
-    image.removeAttribute('src');
-    if (video.dataset.src !== src) {
-      video.dataset.src = src;
-      video.src = src;
-    }
-    video.hidden = false;
-    video.play().catch(() => {});
-    return;
-  }
-  video.pause();
-  video.hidden = true;
-  video.removeAttribute('src');
-  video.dataset.src = '';
-  if (clip) {
-    image.src = src;
-    image.hidden = false;
-  } else {
-    image.hidden = true;
-    image.removeAttribute('src');
-  }
+// A finished reply while the chat is not in front: she shows its start.
+function tellMascotReply(text) {
+  if (!mascot.active || prefs.mascot_replies === false) return;
+  if (document.visibilityState === 'visible' && document.hasFocus()) return;
+  api('/api/mascot/reply', { method: 'POST', body: { text } }).catch(() => {});
 }
 
 function noteActivity() {
@@ -2104,40 +2083,54 @@ function markSpeaking(text) {
   setTimeout(refreshVisualState, seconds * 1000 + 50);
 }
 
-async function loadClips() {
+async function loadMascotStatus() {
   try {
-    const data = await api('/api/clips');
-    visual.clips = data.states || {};
-    const total = Object.values(visual.clips).reduce((n, list) => n + list.length, 0);
-    const info = $('clipsInfo');
-    info.innerHTML = '';
-    const line = document.createElement('div');
-    line.textContent = total
-      ? `${total} clipe(s) encontrados. Para trocar, edite as pastas e reabra o app.`
-      : 'Nenhum clipe ainda: o retrato usa a imagem estática.';
-    const where = document.createElement('div');
-    where.className = 'hint';
-    where.append('Coloque vídeos (.mp4, .webm) ou imagens numa subpasta por estado (');
-    const states = document.createElement('code');
-    states.textContent = Object.keys(STATE_LABELS).join(', ');
-    const dir = document.createElement('code');
-    dir.textContent = data.dir;
-    where.append(states, ') dentro de ', dir, '.');
-    info.append(line, where);
+    applyMascotStatus(await api('/api/mascot/status'));
   } catch (err) {
-    visual.clips = {};
+    applyMascotStatus({ running: false, active: false });
   }
-  visual.state = null;
-  refreshVisualState();
 }
 
-function initPortrait() {
+function applyMascotStatus(status) {
+  const wasRunning = mascot.running;
+  mascot.running = !!status.running;
+  mascot.active = !!status.active;
+  $('btnMascotCall').hidden = !(mascot.running && !mascot.active);
+  if (mascot.running && !wasRunning && visual.state) sendMascotSignal({ state: visual.state });
+  const card = $('mascotStatus');
+  if (!card) return;
+  if (!mascot.running) {
+    card.textContent = 'Ela só aparece na área de trabalho quando o assistente é aberto como aplicativo (run.bat), no Windows. No navegador, os balões dela aparecem aqui na página.';
+  } else if (mascot.active) {
+    card.textContent = status.visible
+      ? `Ela está na área de trabalho agora (${STATE_LABELS[status.state] || 'acordada'}).`
+      : 'Ativa, mas escondida enquanto há algo em tela cheia.';
+  } else {
+    card.textContent = 'Escondida. Ligue a primeira opção abaixo (ou o ✦ na barra lateral) para trazê-la de volta.';
+  }
+}
+
+function initVisualState() {
   ['pointerdown', 'keydown', 'wheel'].forEach(evt =>
     document.addEventListener(evt, noteActivity, { passive: true }));
-  // Broken or unsupported file: fall back to the static portrait.
-  $('portraitVideo').addEventListener('error', () => { $('portraitVideo').hidden = true; });
   setInterval(refreshVisualState, 15000);
-  loadClips();
+  visual.state = null;
+  refreshVisualState();
+  loadMascotStatus();
+  $('btnMascotCall').addEventListener('click', () => {
+    savePref('mascot_enabled', true, { immediate: true });
+    fillPreferenceControls();
+  });
+  $('btnMascotHome').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/mascot/command', { method: 'POST', body: { action: 'home' } });
+      toast(r.delivered ? 'Ela volta para perto do relógio.' : 'Ela não está na área de trabalho agora.');
+    } catch (err) {
+      toast(`Erro: ${err.message}`, 'error');
+    }
+  });
+  // Called by the desktop mascot (run.py) when "Aceitar o Caso" is clicked there.
+  window.victoriqueDesktop = { acceptCase: event => acceptLifeCase(event) };
 }
 
 // ----------------- Vida própria -----------------
@@ -2176,6 +2169,7 @@ async function lifeTick() {
   let next = LIFE_TICK_MS;
   try {
     const data = await api('/api/life/tick', { method: 'POST', body: lifeUiState() });
+    if (typeof data.mascot === 'boolean' && data.mascot !== mascot.active) loadMascotStatus();
     renderLifeStatus(data.status);
     if (data.event) showLifeBubble(data.event);
     if (data.status && data.status.reason === 'preparando') next = LIFE_FAST_TICK_MS;
@@ -2257,8 +2251,31 @@ function lifeTextHtml(text) {
   return escape(text).replace(/\*([^*\n]{1,160})\*/g, '<em>$1</em>');
 }
 
-function showLifeBubble(event) {
+function speakLife(event) {
+  markSpeaking(event.text);
+  if (prefs.life_voice && ttsAvailable) {
+    const spoken = event.text.replace(/\*[^*]*\*/g, ' ').replace(/\s+/g, ' ').trim();
+    if (spoken) api('/api/tts/speak', { method: 'POST', body: { text: spoken, async_: true } }).catch(() => {});
+  }
+}
+
+// With Victorique on the desktop the line goes to her balloon; otherwise
+// (browser, mascot hidden) it shows here in the page.
+async function showLifeBubble(event) {
   life.event = event;
+  if (mascot.active) {
+    try {
+      const body = { category: event.category, text: event.text, case: event.case || null, test: !!event.test };
+      const r = await api('/api/mascot/say', { method: 'POST', body });
+      if (r.shown) { speakLife(event); return; }
+    } catch (err) {
+      // Fall through to the page balloon.
+    }
+  }
+  showPageLifeBubble(event);
+}
+
+function showPageLifeBubble(event) {
   const bubble = $('lifeBubble');
   bubble.dataset.category = event.category;
   $('lifeBubbleMark').textContent = avatarText(activeProfile() || { name: 'V' });
@@ -2271,11 +2288,7 @@ function showLifeBubble(event) {
   $('btnLifeAccept').hidden = !hasCase;
   $('btnLifeLater').hidden = !hasCase;
   bubble.hidden = false;
-  markSpeaking(event.text);
-  if (prefs.life_voice && ttsAvailable) {
-    const spoken = event.text.replace(/\*[^*]*\*/g, ' ').replace(/\s+/g, ' ').trim();
-    if (spoken) api('/api/tts/speak', { method: 'POST', body: { text: spoken, async_: true } }).catch(() => {});
-  }
+  speakLife(event);
   clearTimeout(life.hideTimer);
   const stay = hasCase ? 5 * 60000 : Math.min(90000, 30000 + event.text.length * 120);
   life.hideTimer = setTimeout(hideLifeBubble, stay);
@@ -2307,8 +2320,8 @@ async function resumeLife() {
   }
 }
 
-async function acceptLifeCase() {
-  const event = life.event;
+async function acceptLifeCase(fromDesktop) {
+  const event = (fromDesktop && fromDesktop.case) ? fromDesktop : life.event;
   if (!event || !event.case) return;
   hideLifeBubble();
   try {

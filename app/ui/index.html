@@ -68,27 +68,16 @@
           Nova conversa
         </button>
 
-        <figure class="portrait" id="portrait" data-state="acordada" hidden>
-          <div class="portrait-frame">
-            <video id="portraitVideo" muted loop playsinline hidden></video>
-            <img id="portraitImage" alt="" hidden>
-            <div class="portrait-fallback" id="portraitFallback"><span class="portrait-mark" id="portraitMark">V</span></div>
-            <svg class="pipe" viewBox="0 0 48 48" aria-hidden="true">
-              <path class="pipe-smoke s1" d="M31 21c-3-3 3-5 0-8s3-5 0-8"/>
-              <path class="pipe-smoke s2" d="M35 22c-2-3 2-4 0-7s2-4 0-6"/>
-              <path class="pipe-smoke s3" d="M27 22c-2-2 2-4 0-6s2-4 0-5"/>
-              <path class="pipe-stem" d="M3 29c9 0 15 1 21 3"/>
-              <path class="pipe-bowl" d="M23 24h14v8a7 7 0 0 1-14 0z"/>
-            </svg>
-          </div>
-          <figcaption>
-            <span class="portrait-dot"></span><span id="portraitState">Acordada</span>
-            <span class="life-quiet" id="lifeQuietNote" hidden></span>
-            <button class="icon-btn life-dnd" id="btnLifeDnd" type="button" title="Não perturbar: ela não puxa assunto" aria-label="Não perturbar" aria-pressed="false">
-              <svg class="ic"><use href="#i-moon"/></svg>
-            </button>
-          </figcaption>
-        </figure>
+        <div class="vic-status" id="vicStatus" data-state="acordada">
+          <span class="vic-dot"></span><span class="vic-state" id="vicState">Acordada</span>
+          <span class="life-quiet" id="lifeQuietNote" hidden></span>
+          <button class="icon-btn vic-call" id="btnMascotCall" type="button" title="Trazer a Victorique de volta à área de trabalho" aria-label="Trazer a Victorique de volta" hidden>
+            <svg class="ic"><use href="#i-sparkle"/></svg>
+          </button>
+          <button class="icon-btn life-dnd" id="btnLifeDnd" type="button" title="Não perturbar: ela não puxa assunto" aria-label="Não perturbar" aria-pressed="false">
+            <svg class="ic"><use href="#i-moon"/></svg>
+          </button>
+        </div>
 
         <nav class="side-nav" aria-label="Seções">
           <button class="nav-tab active" data-tab="conversations"><svg class="ic"><use href="#i-chat"/></svg>Conversas</button>
@@ -280,6 +269,7 @@
         <button class="settings-tab" data-section="profiles"><svg class="ic"><use href="#i-sparkle"/></svg>Perfis da assistente</button>
         <button class="settings-tab" data-section="model"><svg class="ic"><use href="#i-cpu"/></svg>Modelo e respostas</button>
         <button class="settings-tab" data-section="appearance"><svg class="ic"><use href="#i-palette"/></svg>Aparência</button>
+        <button class="settings-tab" data-section="desk"><svg class="ic"><use href="#i-sparkle"/></svg>Na área de trabalho</button>
         <button class="settings-tab" data-section="voice"><svg class="ic"><use href="#i-mic"/></svg>Voz</button>
         <button class="settings-tab" data-section="life"><svg class="ic"><use href="#i-feather"/></svg>Vida própria</button>
         <button class="settings-tab" data-section="data"><svg class="ic"><use href="#i-database"/></svg>Dados e backup</button>
@@ -490,15 +480,44 @@
               <button type="button" data-value="serif">Serifada</button>
             </div>
           </div>
+        </section>
+
+        <!-- Na área de trabalho -->
+        <section class="settings-section" data-section="desk">
+          <h2>Na área de trabalho</h2>
+          <p class="section-lead">A Victorique em miniatura anda sobre a barra de tarefas, lê, cochila e fala pelo balão. Arraste-a com o mouse, dê dois cliques para abrir a conversa e use o botão direito para o menu dela.</p>
+          <div class="status-card" id="mascotStatus">Verificando…</div>
           <div class="toggle-row">
-            <div><strong>Retrato animado</strong><small>Mostra a assistente na barra lateral, mudando conforme ela dorme, ouve, pensa ou fala.</small></div>
-            <input type="checkbox" class="switch" data-pref="show_portrait">
+            <div><strong>Mostrar a Victorique na área de trabalho</strong><small>Só no aplicativo de desktop (no navegador ela fica de fora).</small></div>
+            <input type="checkbox" class="switch" data-pref="mascot_enabled">
           </div>
           <div class="field">
-            <label for="prefIdle">Adormece depois de (minutos sem interação)</label>
+            <label for="prefMascotSize">Tamanho (altura em pixels)</label>
+            <input type="number" id="prefMascotSize" data-pref="mascot_size" min="90" max="240" step="2">
+          </div>
+          <div class="toggle-row">
+            <div><strong>Passear pela barra de tarefas</strong><small>Desligado, ela fica onde você a deixar (ainda lê e cochila).</small></div>
+            <input type="checkbox" class="switch" data-pref="mascot_walk">
+          </div>
+          <div class="field">
+            <label for="prefIdle">Ela adormece depois de (minutos sem interação)</label>
             <input type="number" id="prefIdle" data-pref="idle_minutes" min="1" max="120">
           </div>
-          <div class="status-card" id="clipsInfo">Verificando clipes…</div>
+          <div class="toggle-row">
+            <div><strong>Avisar respostas no balão</strong><small>Se a janela da conversa não estiver na frente, ela mostra o começo da resposta.</small></div>
+            <input type="checkbox" class="switch" data-pref="mascot_replies">
+          </div>
+          <div class="toggle-row">
+            <div><strong>Sumir em tela cheia</strong><small>Jogos, vídeos e apresentações em tela cheia ficam livres.</small></div>
+            <input type="checkbox" class="switch" data-pref="mascot_hide_fullscreen">
+          </div>
+          <div class="toggle-row">
+            <div><strong>Fechar a janela só esconde a conversa</strong><small>Ela continua na área de trabalho. Para sair de vez, use «Encerrar o assistente» no menu dela.</small></div>
+            <input type="checkbox" class="switch" data-pref="mascot_keep_on_close">
+          </div>
+          <div class="inline-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="btnMascotHome">Trazer para perto do relógio</button>
+          </div>
         </section>
 
         <!-- Voz -->

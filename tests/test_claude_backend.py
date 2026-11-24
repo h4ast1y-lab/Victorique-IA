@@ -272,3 +272,45 @@ async def test_text_blocks_after_a_tool_are_separated():
     assert events[-1]["content"] == "Vou criar.\n\nPronto."
     tokens = "".join(e["content"] for e in events if e["type"] == "token")
     assert tokens == "Vou criar.\n\nPronto."
+
+
+@pytest.mark.asyncio
+async def test_avatar_controls_are_structured_and_removed_from_claude_text():
+    h = Harness([
+        delta("text_delta", "[expression:ded"),
+        delta("text_delta", "uction]\n[gesture:deduction]\nA verdade é simples."),
+        result(),
+    ])
+    conv = _conv()
+    events = await collect(ClaudeCodeBackend(h.factory).run_turn(conv, "deduza", None, None))
+    assert [event for event in events if event["type"] == "avatar"] == [
+        {"type": "avatar", "expression": "deduction"},
+        {"type": "avatar", "gesture": "deduction"},
+    ]
+    assert "".join(e["content"] for e in events if e["type"] == "token") == "A verdade é simples."
+    assert events[-1]["content"] == "A verdade é simples."
+    assert _assistant_messages(conv)[-1]["content"] == "A verdade é simples."
+
+
+@pytest.mark.asyncio
+async def test_final_text_after_tool_can_select_avatar_without_leaking_marker():
+    h = Harness([
+        block_start(), delta("text_delta", "Vou verificar."),
+        AssistantMessage(content=[TextBlock(text="Vou verificar.")], model="m"),
+        AssistantMessage(content=[ToolUseBlock(id="t1", name="Read", input={})], model="m"),
+        UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="ok", is_error=False)]),
+        block_start(),
+        delta("text_delta", "[expression:focused]\n[gesture:page-turn]\nResolvido."),
+        result(),
+    ])
+    events = await collect(ClaudeCodeBackend(h.factory).run_turn(_conv(), "x", None, None))
+    assert [event for event in events if event["type"] == "avatar"] == [
+        {"type": "avatar", "expression": "focused"},
+        {"type": "avatar", "gesture": "page-turn"},
+    ]
+    assert events[-1]["content"] == "Vou verificar.\n\nResolvido."
+
+
+def test_append_prompt_carries_avatar_instructions():
+    from app.core.avatar_protocol import AVATAR_INSTRUCTIONS
+    assert AVATAR_INSTRUCTIONS in backend_mod.build_append_prompt(None, None)

@@ -5,7 +5,7 @@ import logging
 import re
 import uuid
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
@@ -18,7 +18,8 @@ from app.memory.conversation_store import conversation_store
 from app.memory.memory_store import memory_store
 from app.memory.project_store import project_store
 from app.core.personality import personality_manager
-from app.core import preferences, clips
+from app.core import preferences
+from app.core.avatar_protocol import avatar_manifest
 from app.core.sse import sse_event
 from app.core.assistant import assistant_engine
 from app.core.backup import create_backup, list_backups, backup_path, restore_backup
@@ -31,12 +32,12 @@ from app.security.permissions import security_manager
 from app.tools.registry import tool_registry
 from app.tools import organizer
 from app.life.service import life_service
+from app.mascot.bus import mascot_bus
 from app.voice import tts_engine, stt_engine
 
 # Initialize database schema on startup
 init_db()
 preferences.apply_to_settings()
-clips.ensure_dirs()
 
 
 app = FastAPI(title=settings.app_name, version=settings.version)
@@ -843,17 +844,10 @@ async def authorize_action(req: AuthorizeActionRequest):
         raise HTTPException(status_code=409, detail="Parâmetros divergentes. Ação bloqueada.")
     raise HTTPException(status_code=400, detail="Não foi possível resolver a autorização.")
 
-# ----------------- Portrait clips (user-supplied, per state) -----------------
-@app.get("/api/clips")
-async def get_clips():
-    return {"dir": str(clips.CLIPS_DIR), "states": clips.list_clips()}
-
-@app.get("/api/clips/{state}/{name}")
-async def get_clip(state: str, name: str):
-    path = clips.clip_path(state, name)
-    if path is None:
-        raise HTTPException(status_code=404, detail="Clipe não encontrado.")
-    return FileResponse(str(path))
+# ----------------- Avatar (expressions and gestures of the figure) -----------------
+@app.get("/api/avatar/manifest")
+async def get_avatar_manifest():
+    return avatar_manifest()
 
 # ----------------- Vida própria (spontaneous lines) -----------------
 class LifeTick(BaseModel):
@@ -874,9 +868,19 @@ class LifeTest(LifeTick):
     category: str = Field("tedio", max_length=20)
 
 
+def _life_ui(req: LifeTick) -> Dict[str, Any]:
+    ui = req.model_dump()
+    # With Victorique on the desktop her balloon is visible even when the
+    # chat window is hidden or minimized.
+    if mascot_bus.visible:
+        ui["visible"] = True
+    return ui
+
+
 @app.post("/api/life/tick")
 async def life_tick(req: LifeTick):
-    return await life_service.tick(req.model_dump())
+    result = await life_service.tick(_life_ui(req))
+    return {**result, "mascot": mascot_bus.active}
 
 
 @app.get("/api/life/status")
@@ -898,9 +902,67 @@ async def life_resume():
 @app.post("/api/life/test")
 async def life_test(req: LifeTest):
     try:
-        return await life_service.test(req.category, req.model_dump())
+        result = await life_service.test(req.category, _life_ui(req))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    return {**result, "mascot": mascot_bus.active}
+
+
+# ----------------- Victorique on the desktop (app/mascot) -----------------
+class MascotSignal(BaseModel):
+    state: Optional[str] = Field(None, max_length=20)
+    expression: Optional[str] = Field(None, max_length=32)
+    gesture: Optional[str] = Field(None, max_length=32)
+
+
+class MascotCase(BaseModel):
+    titulo: str = Field("", max_length=160)
+    pergunta: str = Field("", max_length=600)
+
+
+class MascotSay(BaseModel):
+    category: str = Field(..., max_length=20)
+    text: str = Field(..., min_length=1, max_length=2000)
+    case: Optional[MascotCase] = None
+    test: bool = False
+
+
+class MascotReply(BaseModel):
+    text: str = Field(..., max_length=50_000)
+
+
+class MascotCommand(BaseModel):
+    action: Literal["home", "hide"]
+
+
+@app.get("/api/mascot/status")
+async def mascot_status():
+    return mascot_bus.status()
+
+
+@app.post("/api/mascot/signal")
+async def mascot_signal(req: MascotSignal):
+    """Operational state and model-chosen expression/gesture from the chat page."""
+    from app.core.avatar_protocol import EXPRESSIONS, GESTURES, STATES
+    state = req.state if req.state in {s for s, _ in STATES} else None
+    expression = req.expression if req.expression in EXPRESSIONS else None
+    gesture = req.gesture if req.gesture in GESTURES else None
+    return {"delivered": mascot_bus.signal(state, expression, gesture)}
+
+
+@app.post("/api/mascot/say")
+async def mascot_say(req: MascotSay):
+    return {"shown": mascot_bus.say(req.model_dump(exclude_none=True))}
+
+
+@app.post("/api/mascot/reply")
+async def mascot_reply(req: MascotReply):
+    return {"shown": mascot_bus.reply(req.text)}
+
+
+@app.post("/api/mascot/command")
+async def mascot_command(req: MascotCommand):
+    return {"delivered": mascot_bus.command(req.action)}
 
 # ----------------- Organizer (history of moves, undo) -----------------
 @app.get("/api/operations")

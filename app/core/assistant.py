@@ -13,6 +13,7 @@ from app.config import settings, DEFAULT_LLAMA_CPP_MODEL
 from app.voice import tts_engine
 from app.models.events import ReasoningDelta
 from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
+from app.core.avatar_protocol import AvatarControlParser, split_leading_controls
 
 logger = logging.getLogger("assistant")
 
@@ -190,7 +191,15 @@ class AssistantEngine:
                 continue
 
             state["prefix"] += token
-            stripped = state["prefix"].lstrip()
+            # Visual markers ([expression:...]) may precede a tool call; look
+            # past them. They stay in the flushed text for the avatar parser.
+            split = split_leading_controls(state["prefix"])
+            if split is None:
+                continue
+            controls_head, body = split
+            stripped = body.lstrip()
+            if not stripped and controls_head:
+                continue
             looks_like_json = stripped.startswith("{") or stripped.startswith("```")
 
             if not looks_like_json:
@@ -205,35 +214,37 @@ class AssistantEngine:
                 yield chunk
                 continue
 
-            parsed = _parse_text_tool_call(state["prefix"])
+            parsed = _parse_text_tool_call(body)
             if parsed:
                 state["buffering"] = False
                 state["prefix"] = ""
                 state["calls"].append(parsed)
-            elif _fenced_prose_ready(state["prefix"]):
+            elif _fenced_prose_ready(body):
                 # A fenced block that is prose, not a tool call: show it now
                 # without the fence instead of withholding the whole answer.
                 state["buffering"] = False
-                state["strip_fence"] = not state["prefix"].rstrip().endswith("```")
-                chunk = _unwrap_code_fence(state["prefix"])
+                state["strip_fence"] = not body.rstrip().endswith("```")
+                chunk = controls_head + _unwrap_code_fence(body)
                 state["prefix"] = ""
                 state["text"].append(chunk)
                 yield chunk
             elif len(state["prefix"]) > 4000:
                 # Not a tool call; avoid withholding a long normal answer.
                 state["buffering"] = False
-                chunk = _unwrap_code_fence(state["prefix"])
+                chunk = controls_head + _unwrap_code_fence(body)
                 state["prefix"] = ""
                 state["text"].append(chunk)
                 yield chunk
 
         if state["buffering"] and state["prefix"]:
-            parsed = _parse_text_tool_call(state["prefix"])
+            split = split_leading_controls(state["prefix"]) or ("", state["prefix"])
+            controls_head, body = split
+            parsed = _parse_text_tool_call(body)
             state["buffering"] = False
             if parsed:
                 state["calls"].append(parsed)
             else:
-                chunk = _unwrap_code_fence(state["prefix"])
+                chunk = controls_head + _unwrap_code_fence(body)
                 state["prefix"] = ""
                 state["text"].append(chunk)
                 yield chunk
@@ -389,6 +400,9 @@ class AssistantEngine:
                     "use_llama_cpp": use_llama_cpp_server or use_llama_cpp_lib,
                     "backend_name": backend_name,
                 }
+                # Each round may follow a tool call; the final round still gets
+                # to pick the figure's expression and gesture.
+                avatar_parser = AvatarControlParser()
 
                 try:
                     async for token in self._stream_model_round(
@@ -403,8 +417,12 @@ class AssistantEngine:
                         if isinstance(token, ReasoningDelta):
                             yield _event({"type": "reasoning", "content": token.text})
                             continue
-                        full_response_parts.append(token)
-                        yield _event({"type": "token", "content": token})
+                        controls, chunks = avatar_parser.feed(token)
+                        for control in controls:
+                            yield _event(control)
+                        for chunk in chunks:
+                            full_response_parts.append(chunk)
+                            yield _event({"type": "token", "content": chunk})
                 except RuntimeError as exc:
                     # Some local models do not support the tools API. Fall back
                     # to plain chat instead of failing the whole turn.
@@ -438,10 +456,21 @@ class AssistantEngine:
                             if isinstance(token, ReasoningDelta):
                                 yield _event({"type": "reasoning", "content": token.text})
                                 continue
-                            full_response_parts.append(token)
-                            yield _event({"type": "token", "content": token})
+                            controls, chunks = avatar_parser.feed(token)
+                            for control in controls:
+                                yield _event(control)
+                            for chunk in chunks:
+                                full_response_parts.append(chunk)
+                                yield _event({"type": "token", "content": chunk})
                     else:
                         raise
+
+                controls, chunks = avatar_parser.finish()
+                for control in controls:
+                    yield _event(control)
+                for chunk in chunks:
+                    full_response_parts.append(chunk)
+                    yield _event({"type": "token", "content": chunk})
 
                 tool_calls = state["calls"]
                 if not tool_calls:

@@ -2,6 +2,7 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 from app.config import settings
+from app.core.avatar_protocol import AVATAR_INSTRUCTIONS
 from app.core.dialogue_style import style_note
 from app.core.personality import personality_manager
 from app.memory.memory_store import memory_store
@@ -141,7 +142,11 @@ class ContextBuilder:
                 f"{turbo_note}"
             )
 
-        # 6. Anti-repetition: a neutral note when recent replies reuse openings
+        # 6. Bounded visual controls for the desktop figure. They are parsed
+        # out of the answer before transcript storage and speech.
+        system_parts.append(AVATAR_INSTRUCTIONS)
+
+        # 7. Anti-repetition: a neutral note when recent replies reuse openings
         note = style_note(conversation_history)
         if note:
             system_parts.append(note)

@@ -43,8 +43,14 @@ SCHEMA: Dict[str, tuple] = {
     "show_reasoning": ("bool", True, None),
     "show_tool_events": ("bool", True, None),
     "show_suggestions": ("bool", True, None),
-    "show_portrait": ("bool", True, None),
     "idle_minutes": ("int", 5, (1, 120)),
+    # --- Victorique na área de trabalho (app/mascot) ---
+    "mascot_enabled": ("bool", True, None),
+    "mascot_size": ("int", 136, (90, 240)),
+    "mascot_walk": ("bool", True, None),
+    "mascot_replies": ("bool", True, None),
+    "mascot_hide_fullscreen": ("bool", True, None),
+    "mascot_keep_on_close": ("bool", True, None),
     # --- Vida própria (spontaneous lines; app/life) ---
     "life_boredom": ("bool", True, None),
     "life_comments": ("bool", True, None),

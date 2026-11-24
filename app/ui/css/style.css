@@ -606,49 +606,12 @@ kbd { font-size: 0.8em; padding: 2px 7px; border-radius: 6px; border: 1px solid 
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ----------------- Portrait (state clips) ----------------- */
-.portrait { margin: 10px 2px 4px; }
-.portrait-frame {
-  position: relative; aspect-ratio: 16 / 10; border-radius: 12px; overflow: hidden;
-  background: radial-gradient(120% 90% at 30% 20%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%), var(--surface-2);
-  border: 1px solid var(--border);
-  transition: border-color .3s, filter .6s;
-}
-.portrait-frame video, .portrait-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.portrait-fallback { position: absolute; inset: 0; display: grid; place-items: center; }
-.portrait-frame video:not([hidden]) ~ .portrait-fallback,
-.portrait-frame img:not([hidden]) ~ .portrait-fallback { display: none; }
-.portrait-mark {
-  width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
-  font-family: var(--font-serif, Georgia, serif); font-size: 28px; color: #fff; background: var(--accent);
-  transition: transform .6s, opacity .6s;
-}
-.portrait figcaption { display: flex; align-items: center; gap: 7px; font-size: 0.78em; color: var(--muted); padding: 6px 4px 0; }
-.portrait-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
-
-.portrait[data-state="acordada"] .portrait-dot { background: var(--accent); }
-.portrait[data-state="dormindo"] .portrait-frame { filter: saturate(.55) brightness(.75); }
-.portrait[data-state="dormindo"] .portrait-mark { transform: rotate(-14deg) scale(.92); opacity: .7; }
-.portrait[data-state="ouvindo"] .portrait-frame { border-color: var(--accent); }
-.portrait[data-state="ouvindo"] .portrait-dot { background: var(--accent); animation: blink 1s infinite ease-in-out both; }
-.portrait[data-state="pensando"] .portrait-dot { background: var(--warning); }
-.portrait[data-state="falando"] .portrait-dot { background: var(--success, #4f9f78); }
-.portrait[data-state="falando"] .portrait-mark { animation: speak 1.1s infinite ease-in-out; }
-.portrait[data-state="erro"] .portrait-frame { border-color: var(--danger, #d65c5c); }
-.portrait[data-state="erro"] .portrait-dot { background: var(--danger, #d65c5c); }
-
-/* The pipe: shown while she thinks, over the clip or the static portrait. */
+/* ----------------- The pipe in the chat's "thinking" line ----------------- */
 .pipe { width: 48px; height: 48px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .pipe .pipe-bowl { fill: currentColor; stroke: none; }
 .pipe .pipe-smoke { stroke-width: 1.6; opacity: 0; animation: smoke 2.4s infinite ease-out; }
 .pipe .s2 { animation-delay: .8s; }
 .pipe .s3 { animation-delay: 1.6s; }
-.portrait .pipe {
-  position: absolute; right: 10px; bottom: 6px; width: 62px; height: 62px; color: #f3e6d0;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .6));
-  opacity: 0; transform: translateY(4px); transition: opacity .4s, transform .4s;
-}
-.portrait[data-state="pensando"] .pipe { opacity: 1; transform: none; }
 .thinking .pipe { width: 22px; height: 22px; color: var(--accent); stroke-width: 2.6; }
 
 @keyframes smoke {
@@ -656,7 +619,6 @@ kbd { font-size: 0.8em; padding: 2px 7px; border-radius: 6px; border: 1px solid 
   30% { opacity: .85; }
   100% { opacity: 0; transform: translateY(-6px); }
 }
-@keyframes speak { 50% { transform: scale(1.06); } }
 
 /* ----------------- Casos arquivados ----------------- */
 .archived-cases { margin-top: 10px; }
@@ -664,10 +626,23 @@ kbd { font-size: 0.8em; padding: 2px 7px; border-radius: 6px; border: 1px solid 
 .archived-cases summary:hover { color: var(--text); }
 .list-item.archived .list-item-title { color: var(--muted); }
 
+/* ----------------- Estado da Victorique (barra lateral) ----------------- */
+.vic-status { display: flex; align-items: center; gap: 7px; font-size: 0.78em; color: var(--muted); margin: 8px 4px 2px; padding: 4px 6px; border-radius: 9px; min-height: 30px; }
+.vic-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.vic-state { white-space: nowrap; }
+.vic-status[data-state="acordada"] .vic-dot { background: var(--accent); }
+.vic-status[data-state="ouvindo"] .vic-dot { background: var(--accent); animation: blink 1s infinite ease-in-out both; }
+.vic-status[data-state="pensando"] .vic-dot { background: var(--warning); }
+.vic-status[data-state="falando"] .vic-dot { background: var(--success, #4f9f78); }
+.vic-status[data-state="erro"] .vic-dot { background: var(--danger, #d65c5c); }
+.vic-status .icon-btn { width: 26px; height: 26px; color: var(--muted); flex: none; }
+.vic-status .icon-btn .ic { width: 14px; height: 14px; }
+.vic-status .life-dnd { margin-left: auto; }
+.vic-status .vic-call:not([hidden]) + .life-dnd { margin-left: 0; }
+.vic-status .vic-call:not([hidden]) { margin-left: auto; color: var(--accent); }
+.vic-status .life-dnd[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+
 /* ----------------- Vida própria ----------------- */
-.portrait figcaption .life-dnd { margin-left: auto; width: 26px; height: 26px; color: var(--muted); }
-.portrait figcaption .life-dnd .ic { width: 14px; height: 14px; }
-.portrait figcaption .life-dnd[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 .life-quiet { font-size: 0.92em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .life-bubble {

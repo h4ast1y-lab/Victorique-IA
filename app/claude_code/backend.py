@@ -23,6 +23,7 @@ from claude_agent_sdk import (
 from app.claude_code.options import build_options
 from app.claude_code.permissions import PermissionBridge
 from app.config import settings
+from app.core.avatar_protocol import AVATAR_INSTRUCTIONS, AvatarControlParser
 from app.core.dialogue_style import style_note
 from app.core.personality import personality_manager
 from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
@@ -89,7 +90,7 @@ def build_append_prompt(
                 f"Descrição: {project.get('description', '')}\n"
                 f"Dossiê do caso (instruções): {project.get('instructions', '')}"
             )
-    parts.append(TOOLS_NOTE)
+    parts.extend([AVATAR_INSTRUCTIONS, TOOLS_NOTE])
     note = style_note(history or [])
     if note:
         parts.append(note)
@@ -127,6 +128,7 @@ class _Turn:
         self.separate = False
         self.client: Any = None
         self.cancelled = False
+        self.avatar = AvatarControlParser()
 
     def text(self) -> str:
         return "".join(self.parts)
@@ -137,15 +139,32 @@ class _Turn:
 
     def _start_text_block(self) -> None:
         """A new text block after earlier text (e.g. after a tool) starts a new paragraph."""
+        if self.parts or self.tools:
+            # The final answer (after tools) may pick its own expression.
+            self.finish_text()
+            self.avatar = AvatarControlParser()
         self.separate = bool(self.parts)
 
     def _add_text(self, text: str) -> None:
-        if self.separate:
-            self.separate = False
-            if not self.text().endswith("\n"):
-                text = "\n\n" + text.lstrip("\n")
-        self.parts.append(text)
-        self._out({"type": "token", "content": text})
+        controls, chunks = self.avatar.feed(text)
+        for control in controls:
+            self._out(control)
+        for chunk in chunks:
+            if self.separate:
+                self.separate = False
+                if not self.text().endswith("\n"):
+                    chunk = "\n\n" + chunk.lstrip("\n")
+            self.parts.append(chunk)
+            self._out({"type": "token", "content": chunk})
+
+    def finish_text(self) -> None:
+        """Releases text the avatar parser held back (e.g. a lone "[")."""
+        controls, chunks = self.avatar.finish()
+        for control in controls:
+            self._out(control)
+        for chunk in chunks:
+            self.parts.append(chunk)
+            self._out({"type": "token", "content": chunk})
 
     def handle(self, message: Any) -> None:
         if isinstance(message, StreamEvent):
@@ -263,6 +282,7 @@ class ClaudeCodeBackend:
             if not turn.cancelled:
                 turn.error = friendly_error(exc)
         finally:
+            turn.finish_text()
             turn.emit(_END)
 
     async def _stop(self, turn: _Turn, consumer: asyncio.Task, conversation_id: str) -> None:

@@ -150,7 +150,7 @@ def main():
     try:
         import webview
         print("Abrindo janela de desktop nativa (WebView2)...")
-        webview.create_window(
+        window = webview.create_window(
             title="Victorique",
             url=app_url,
             width=1200,
@@ -158,7 +158,14 @@ def main():
             min_size=(920, 600),
             text_select=True
         )
+        # Victorique em miniatura andando pela área de trabalho.
+        from app.mascot import launcher
+        mascot = launcher.start(window)
+        if mascot:
+            print("[OK] Victorique está na área de trabalho (clique direito nela para o menu).")
         webview.start()
+        if mascot:
+            mascot.stop()
     except Exception as e:
         print(f"Aviso ao abrir janela nativa: {e}. Alternando para navegador padrão...")
         import webbrowser
