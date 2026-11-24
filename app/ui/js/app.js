@@ -52,6 +52,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupSliders();
   setupSettingsControls();
   renderSuggestions();
+  applyAvatarPhoto();
+  loadAvatarPhoto();
   await loadPreferences();
   await loadBackendMode();
   await loadProfiles();
@@ -117,6 +119,12 @@ function setupEventListeners() {
   $('btnUploadDoc').addEventListener('click', () => fileInput.click());
   $('btnModalUploadDoc').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', handleFileUpload);
+  $('btnAvatarPhotoUpload').addEventListener('click', () => $('avatarPhotoInput').click());
+  $('avatarPhotoInput').addEventListener('change', async (e) => {
+    await uploadAvatarPhoto(e.target.files[0]);
+    e.target.value = '';
+  });
+  $('btnAvatarPhotoReset').addEventListener('click', resetAvatarPhoto);
 
   $('searchConversations').addEventListener('input', renderConversationList);
 
@@ -626,6 +634,77 @@ function avatarText(p) {
   return (p.avatar || '').trim() || (p.name || '?').charAt(0).toUpperCase();
 }
 
+// The Victorique profile (with no text avatar) shows her photo. The photo URL
+// lives in the --avatar-photo CSS variable, so changing it repaints every
+// avatar already on screen, old messages included.
+function usesAvatarPhoto(p) {
+  return !p || (p.id === 'victorique' && !(p.avatar || '').trim());
+}
+
+function paintAvatar(el, p) {
+  const photo = usesAvatarPhoto(p);
+  el.classList.toggle('has-photo', photo);
+  el.textContent = photo ? '' : avatarText(p);
+}
+
+let avatarPhotoInfo = { source: 'default', url: '/api/avatar/photo' };
+
+function applyAvatarPhoto(info) {
+  if (info) avatarPhotoInfo = info;
+  const url = avatarPhotoInfo.url;
+  document.documentElement.style.setProperty('--avatar-photo', `url("${url}")`);
+  let link = document.querySelector('link[rel="icon"]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'icon';
+    document.head.appendChild(link);
+  }
+  link.removeAttribute('type');
+  link.href = url;
+  const preview = $('avatarPhotoPreview');
+  if (preview) preview.style.backgroundImage = `url("${url}")`;
+  const reset = $('btnAvatarPhotoReset');
+  if (reset) reset.disabled = avatarPhotoInfo.source !== 'custom';
+  const note = $('avatarPhotoSource');
+  if (note) note.textContent = avatarPhotoInfo.source === 'custom' ? 'Foto escolhida por você.' : 'Foto padrão.';
+}
+
+async function loadAvatarPhoto() {
+  try {
+    applyAvatarPhoto(await api('/api/avatar/photo/info'));
+  } catch (err) {
+    console.error('Failed to load avatar photo', err);
+    applyAvatarPhoto();
+  }
+}
+
+async function uploadAvatarPhoto(file) {
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) {
+    toast('Imagem maior que 5 MB.', 'error');
+    return;
+  }
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    applyAvatarPhoto(await api('/api/avatar/photo', { method: 'POST', body: form }));
+    prefs.avatar_photo = 'custom';
+    toast('Foto trocada');
+  } catch (err) {
+    toast(`Não troquei a foto: ${err.message}`, 'error');
+  }
+}
+
+async function resetAvatarPhoto() {
+  try {
+    applyAvatarPhoto(await api('/api/avatar/photo', { method: 'DELETE' }));
+    prefs.avatar_photo = 'default';
+    toast('Foto padrão restaurada');
+  } catch (err) {
+    toast(`Não restaurei: ${err.message}`, 'error');
+  }
+}
+
 async function loadProfiles() {
   try {
     profilesCache = await api('/api/personalities');
@@ -641,11 +720,10 @@ async function loadProfiles() {
 
 function updateProfileUi() {
   const p = activeProfile();
-  const av = avatarText(p);
-  $('profilePillAvatar').textContent = av;
+  paintAvatar($('profilePillAvatar'), p);
   $('profilePillName').textContent = p ? p.name : '—';
-  $('welcomeAvatar').textContent = av;
-  $('brandAvatar').textContent = av;
+  paintAvatar($('welcomeAvatar'), p);
+  paintAvatar($('brandAvatar'), p);
   $('brandName').textContent = p ? p.name : 'Victorique';
   $('composerNote').textContent = `${p ? p.name : 'A assistente'} pode errar. Confira informações importantes.`;
   document.title = p ? p.name : 'Victorique';
@@ -665,7 +743,7 @@ function toggleProfileMenu() {
       <span class="pill-avatar"></span>
       <span class="popover-item-text"><strong></strong><small></small></span>
       ${p.id === currentPersonalityId ? icon('check', 'ic check') : ''}`;
-    item.querySelector('.pill-avatar').textContent = avatarText(p);
+    paintAvatar(item.querySelector('.pill-avatar'), p);
     item.querySelector('strong').textContent = p.name;
     item.querySelector('small').textContent = p.description || (p.is_default ? 'Perfil padrão' : p.tone || '');
     item.addEventListener('click', () => {
@@ -703,7 +781,7 @@ function renderProfileList() {
       <span class="profile-card-avatar"></span>
       <span class="profile-card-text"><strong></strong><small></small></span>
       ${p.is_default ? '<span class="badge">Padrão</span>' : ''}`;
-    card.querySelector('.profile-card-avatar').textContent = avatarText(p);
+    paintAvatar(card.querySelector('.profile-card-avatar'), p);
     card.querySelector('strong').textContent = p.name;
     card.querySelector('small').textContent = p.tone || '';
     card.addEventListener('click', () => loadProfileIntoEditor(p));
@@ -1261,7 +1339,7 @@ function renderMessage(role, content, sources = null) {
   } else {
     const avatar = document.createElement('div');
     avatar.className = 'msg-avatar';
-    avatar.textContent = avatarText(activeProfile());
+    paintAvatar(avatar, activeProfile());
     const body = document.createElement('div');
     body.className = 'msg-body';
     bubble.innerHTML = md(content || '');
@@ -2278,7 +2356,7 @@ async function showLifeBubble(event) {
 function showPageLifeBubble(event) {
   const bubble = $('lifeBubble');
   bubble.dataset.category = event.category;
-  $('lifeBubbleMark').textContent = avatarText(activeProfile() || { name: 'V' });
+  paintAvatar($('lifeBubbleMark'), activeProfile());
   $('lifeBubbleName').textContent = activeProfileName();
   $('lifeBubbleTag').textContent = (event.test ? 'teste · ' : '') + (LIFE_TAGS[event.category] || '');
   $('lifeBubbleText').innerHTML = lifeTextHtml(event.text);

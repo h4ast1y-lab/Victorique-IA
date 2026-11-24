@@ -44,6 +44,8 @@ SCHEMA: Dict[str, tuple] = {
     "show_tool_events": ("bool", True, None),
     "show_suggestions": ("bool", True, None),
     "idle_minutes": ("int", 5, (1, 120)),
+    # Foto do avatar (arquivo em DATA_DIR/avatar; ver app/core/avatar_photo.py)
+    "avatar_photo": ("choice", "default", ("default", "custom")),
     # --- Victorique na área de trabalho (app/mascot) ---
     "mascot_enabled": ("bool", True, None),
     "mascot_size": ("int", 136, (90, 240)),

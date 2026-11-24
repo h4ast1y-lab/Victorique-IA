@@ -41,3 +41,9 @@ data/operations.tmp
 data/vida_propria.json
 data/.vida-*
 data/falas.md
+
+# Foto do avatar enviada pelo usuário
+data/avatar/
+
+# Launcher gerado (scripts/build_launcher.py)
+Victorique.exe

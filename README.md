@@ -40,6 +40,18 @@ ou
 .venv\Scripts\python.exe run.py
 ```
 
+ou o atalho `Victorique.exe` (sem janela de console, com o ícone dela). Ele
+não vem pronto: gere uma vez na pasta do projeto e deixe-o lá, ao lado do
+`run.py` (a saída do app vai para `data\victorique.log`):
+
+```bat
+.venv\Scripts\python.exe -m pip install pyinstaller
+.venv\Scripts\python.exe scripts\build_launcher.py
+```
+
+A foto da Victorique (sidebar, mensagens, ícone da janela) pode ser trocada em
+Configurações → Aparência; a enviada fica em `data\avatar\`.
+
 Variações úteis:
 
 ```bat

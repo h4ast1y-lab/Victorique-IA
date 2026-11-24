@@ -22,6 +22,24 @@ def configure_console():
             pass
 
 
+APP_USER_MODEL_ID = "Victorique.Assistente"
+
+
+def set_app_identity():
+    """Gives the process its own taskbar identity on Windows.
+
+    Without it the window groups under python.exe and the taskbar shows the
+    Python icon; with it, the taskbar uses the window icon (her photo).
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except Exception:
+        pass
+
+
 def ollama_url() -> str:
     return os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 
@@ -149,6 +167,9 @@ def main():
 
     try:
         import webview
+        from app.core import avatar_photo
+        set_app_identity()
+        icon = avatar_photo.window_icon()
         print("Abrindo janela de desktop nativa (WebView2)...")
         window = webview.create_window(
             title="Victorique",
@@ -163,7 +184,7 @@ def main():
         mascot = launcher.start(window)
         if mascot:
             print("[OK] Victorique está na área de trabalho (clique direito nela para o menu).")
-        webview.start()
+        webview.start(icon=str(icon) if icon else None)
         if mascot:
             mascot.stop()
     except Exception as e:

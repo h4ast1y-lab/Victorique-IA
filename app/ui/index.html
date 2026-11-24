@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Victorique</title>
-  <link rel="icon" href="/ui/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/api/avatar/photo">
   <link rel="stylesheet" href="/ui/css/style.css">
 </head>
 <body>
@@ -438,6 +438,20 @@
         <section class="settings-section" data-section="appearance">
           <h2>Aparência</h2>
           <p class="section-lead">As mudanças aparecem na hora.</p>
+          <div class="field">
+            <label>Foto da Victorique</label>
+            <div class="avatar-photo-row">
+              <span class="avatar-photo-preview" id="avatarPhotoPreview" role="img" aria-label="Foto atual da Victorique"></span>
+              <div class="avatar-photo-actions">
+                <div class="avatar-photo-buttons">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnAvatarPhotoUpload">Enviar foto…</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="btnAvatarPhotoReset" disabled>Restaurar padrão</button>
+                </div>
+                <small><span id="avatarPhotoSource">Foto padrão.</span> PNG, JPG ou WEBP, até 5 MB. A imagem é recortada em quadrado.</small>
+              </div>
+              <input type="file" id="avatarPhotoInput" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden>
+            </div>
+          </div>
           <div class="field">
             <label>Tema</label>
             <div class="segmented" data-pref-group="theme">

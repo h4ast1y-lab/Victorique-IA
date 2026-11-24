@@ -119,6 +119,19 @@ code, kbd, pre { font-family: var(--font-mono); }
   background: var(--accent); color: var(--on-accent); flex: none; line-height: 1;
 }
 .brand-mark { width: 28px; height: 28px; font-size: 15px; }
+:root { --avatar-photo: url("/api/avatar/photo"); }
+.has-photo.has-photo, .avatar-photo-preview {
+  background-color: var(--surface-2); background-image: var(--avatar-photo);
+  background-size: cover; background-position: center; color: transparent;
+}
+.avatar-photo-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.avatar-photo-preview {
+  width: 64px; height: 64px; border-radius: 50%; flex: none;
+  border: 1px solid var(--border);
+}
+.avatar-photo-actions { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.avatar-photo-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.avatar-photo-actions small { color: var(--text-2); }
 .brand-name { font-family: var(--font-serif); font-size: 18px; font-weight: 600; flex: 1; letter-spacing: 0.01em; }
 
 .icon-btn {
@@ -263,6 +276,8 @@ html[data-theme="dark"] .list-item.active { background: #34332f; }
 .welcome-screen { display: none; text-align: center; }
 .chat-main.is-empty .welcome-screen { display: block; }
 .welcome-mark { width: 44px; height: 44px; font-size: 22px; margin-bottom: 16px; }
+.welcome-mark.has-photo { width: 72px; height: 72px; box-shadow: 0 0 0 1px var(--border); }
+.brand-mark.has-photo { width: 32px; height: 32px; }
 .welcome-screen h1 {
   font-family: var(--font-serif); font-weight: 500;
   font-size: 2.35em; line-height: 1.15; letter-spacing: -0.01em;

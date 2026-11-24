@@ -20,6 +20,7 @@ from app.memory.project_store import project_store
 from app.core.personality import personality_manager
 from app.core import preferences
 from app.core.avatar_protocol import avatar_manifest
+from app.core import avatar_photo
 from app.core.sse import sse_event
 from app.core.assistant import assistant_engine
 from app.core.backup import create_backup, list_backups, backup_path, restore_backup
@@ -849,6 +850,30 @@ async def authorize_action(req: AuthorizeActionRequest):
 async def get_avatar_manifest():
     return avatar_manifest()
 
+
+# ----------------- Avatar photo (default or chosen by the user) -----------------
+@app.get("/api/avatar/photo")
+async def get_avatar_photo():
+    path = avatar_photo.current_path()
+    media = "image/png" if path.suffix == ".png" else "image/webp"
+    return FileResponse(str(path), media_type=media, headers={"Cache-Control": "no-cache"})
+
+@app.get("/api/avatar/photo/info")
+async def get_avatar_photo_info():
+    return avatar_photo.info()
+
+@app.post("/api/avatar/photo")
+async def upload_avatar_photo(file: UploadFile = File(...)):
+    data = await file.read(avatar_photo.MAX_BYTES + 1)
+    try:
+        return avatar_photo.save_custom(data)
+    except avatar_photo.AvatarError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+@app.delete("/api/avatar/photo")
+async def reset_avatar_photo():
+    return avatar_photo.restore_default()
+
 # ----------------- Vida própria (spontaneous lines) -----------------
 class LifeTick(BaseModel):
     app_idle_seconds: float = Field(0, ge=0, le=10_000_000)
@@ -1040,4 +1065,4 @@ async def root():
 
 @app.get("/favicon.ico")
 async def favicon():
-    return FileResponse(str(UI_DIR / "favicon.svg"), media_type="image/svg+xml")
+    return await get_avatar_photo()
