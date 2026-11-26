@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from typing import Dict, Any, Callable, List, Optional
 
@@ -385,7 +386,9 @@ class ToolRegistry:
             if inspect.iscoroutinefunction(tool.func):
                 result = await tool.func(**params)
             else:
-                result = tool.func(**params)
+                # File, OCR and Office tools block (disk, big documents); in a
+                # thread they no longer freeze every other request and stream.
+                result = await asyncio.to_thread(tool.func, **params)
 
             security_manager.log_action(
                 action_type=tool.name,

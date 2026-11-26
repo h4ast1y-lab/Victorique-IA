@@ -20,8 +20,13 @@ def _safe_backup_name(name: str) -> str:
     return base
 
 
+def _read_only_uri(path: Path) -> str:
+    """file:///C:/...%20... form: survives spaces, '#' and '%' in the folder name."""
+    return Path(path).resolve().as_uri() + "?mode=ro"
+
+
 def _integrity_ok(path: Path) -> bool:
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn = sqlite3.connect(_read_only_uri(path), uri=True)
     try:
         result = conn.execute("PRAGMA integrity_check").fetchone()
         return bool(result and result[0] == "ok")
@@ -102,7 +107,7 @@ def restore_backup(name: str, confirm: bool = False) -> Dict[str, Any]:
 
     pre_restore = create_backup(label="pre-restore")
 
-    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    src = sqlite3.connect(_read_only_uri(source), uri=True)
     dst = sqlite3.connect(str(DB_PATH))
     try:
         with dst:

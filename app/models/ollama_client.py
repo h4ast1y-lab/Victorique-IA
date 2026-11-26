@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import AsyncGenerator, Optional, List, Dict, Any
 import httpx
 
@@ -7,39 +8,61 @@ from app.config import settings
 
 logger = logging.getLogger("ollama_client")
 
+# Probes (health, model list) must answer fast: on Windows a refused connection
+# to 127.0.0.1 alone takes about 2 s, and the UI asks every 30 s.
+PROBE_TIMEOUT = httpx.Timeout(5.0, connect=2.0)
+# After a failed connection, probes and embeddings skip Ollama for a while
+# instead of paying that delay again on every message.
+DOWN_SECONDS = 20.0
+
+
 class OllamaClient:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
         self.timeout = httpx.Timeout(120.0, connect=10.0)
+        self._down_until = 0.0
+
+    def _mark(self, reachable: bool) -> None:
+        self._down_until = 0.0 if reachable else time.monotonic() + DOWN_SECONDS
+
+    def recently_down(self) -> bool:
+        """True while a recent connection attempt failed (cleared on success)."""
+        return time.monotonic() < self._down_until
+
+    async def get_version(self) -> Optional[str]:
+        """Ollama's version, or None when it is not running."""
+        if self.recently_down():
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=PROBE_TIMEOUT) as client:
+                resp = await client.get(f"{self.base_url}/api/version")
+            if resp.status_code == 200:
+                self._mark(True)
+                return str(resp.json().get("version") or "")
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            self._mark(False)
+            logger.debug(f"Ollama healthcheck failed: {e}")
+        except Exception as e:
+            logger.debug(f"Ollama healthcheck failed: {e}")
+        return None
 
     async def is_alive(self) -> bool:
         """Verifies if the Ollama service is reachable."""
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.get(f"{self.base_url}/api/version")
-                return resp.status_code == 200
-        except Exception as e:
-            logger.debug(f"Ollama healthcheck failed: {e}")
-            return False
-
-    async def get_version(self) -> Optional[str]:
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.get(f"{self.base_url}/api/version")
-                if resp.status_code == 200:
-                    return resp.json().get("version")
-        except Exception:
-            pass
-        return None
+        return await self.get_version() is not None
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """Returns the list of locally available models."""
+        if self.recently_down():
+            return []
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=PROBE_TIMEOUT) as client:
                 resp = await client.get(f"{self.base_url}/api/tags")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("models", [])
+            if resp.status_code == 200:
+                self._mark(True)
+                return resp.json().get("models", [])
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            self._mark(False)
+            logger.info(f"Ollama indisponível ao listar modelos: {e}")
         except Exception as e:
             logger.error(f"Error listing models: {e}")
         return []
@@ -155,16 +178,22 @@ class OllamaClient:
         """
         Generates dense vector embeddings using local Ollama model.
         """
+        if self.recently_down():
+            raise httpx.ConnectError("Ollama offline (verificado há pouco)")
         model = model or settings.embedding_model
         url = f"{self.base_url}/api/embeddings"
         payload = {"model": model, "prompt": text}
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data.get("embedding", [])
-            else:
-                raise RuntimeError(f"Failed to generate embeddings: {resp.text}")
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(url, json=payload)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            self._mark(False)
+            raise
+        self._mark(True)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("embedding", [])
+        raise RuntimeError(f"Failed to generate embeddings: {resp.text}")
 
 ollama_client = OllamaClient()

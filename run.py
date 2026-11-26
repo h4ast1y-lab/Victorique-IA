@@ -49,6 +49,15 @@ def set_app_identity():
         pass
 
 
+def saved_backend() -> str:
+    """Mode chosen in the UI (settings table), else the env/config default."""
+    try:
+        from app.memory.database import saved_backend as _saved
+        return _saved()
+    except Exception:
+        return ""
+
+
 def ollama_url() -> str:
     return os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 
@@ -155,7 +164,12 @@ def main():
     headless = "--server" in args
     use_browser = "--browser" in args or headless
 
-    if "--no-ollama" not in args:
+    # Ollama is started (and its model checked) only in Ollama mode: in
+    # Claude Code / Codex / llama.cpp mode it would just cost seconds at every
+    # start and a background process that nothing uses.
+    backend = saved_backend()
+    use_ollama = backend == "ollama" and "--no-ollama" not in args
+    if use_ollama:
         ensure_ollama_running()
 
     from app.config import settings
@@ -171,7 +185,8 @@ def main():
         sys.exit(1)
 
     print("[OK] Backend inicializado com sucesso!")
-    check_configured_model()
+    if use_ollama:
+        check_configured_model()
 
     if headless:
         print(f"Modo servidor: interface em {app_url} (Ctrl+C para encerrar).")

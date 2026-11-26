@@ -1,3 +1,6 @@
+import fnmatch
+import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from app.security.path_guard import ensure_not_hardlinked, path_guard
@@ -273,34 +276,83 @@ def read_file(
     }
 
 
+SEARCH_MAX_RESULTS = 50
+SEARCH_MAX_ENTRIES = 200_000   # names looked at before giving up
+SEARCH_MAX_SECONDS = 8.0       # a search over a whole disk must not freeze the chat
+
+
 def search_files(path: str = ".", pattern: str = "*") -> Dict[str, Any]:
     resolved = path_guard.validate_and_resolve(path, must_exist=True)
     if not resolved.is_dir():
         raise NotADirectoryError(f"'{path}' não é um diretório.")
 
-    # Recurse without following symlinks/junctions that could leave the whitelist.
-    results = []
-    try:
-        iterator = resolved.rglob(pattern, recurse_symlinks=False)
-    except TypeError:  # older Python versions
-        iterator = resolved.rglob(pattern)
+    pattern = (pattern or "*").strip() or "*"
+    results: List[Dict[str, Any]] = []
+    truncated = False
+    deadline = time.monotonic() + SEARCH_MAX_SECONDS
+    seen = 0
 
-    for item in iterator:
-        if path_guard.is_safe_path(str(item)) and not path_guard.is_protected(str(item)):
-            results.append({
-                "name": item.name,
-                "is_dir": item.is_dir(),
-                "path": str(item)
-            })
-            if len(results) >= 50:
+    def _add(item: Path, is_dir: bool) -> bool:
+        """Records a match; True when the result list is full."""
+        results.append({"name": item.name, "is_dir": is_dir, "path": str(item)})
+        return len(results) >= SEARCH_MAX_RESULTS
+
+    if any(sep in pattern for sep in ("/", "\\")):
+        # Patterns with folders ("sub/*.txt") keep pathlib's semantics.
+        try:
+            iterator = resolved.rglob(pattern, recurse_symlinks=False)
+        except TypeError:  # Python < 3.13
+            iterator = resolved.rglob(pattern)
+        for item in iterator:
+            seen += 1
+            if seen > SEARCH_MAX_ENTRIES or time.monotonic() > deadline:
+                truncated = True
+                break
+            if path_guard.is_safe_path(str(item)) and not path_guard.is_protected(str(item)):
+                if _add(item, item.is_dir()):
+                    break
+    else:
+        # Walk without following links/junctions and without descending into
+        # protected or unauthorized folders at all (rglob used to scan them
+        # and only filter the results afterwards).
+        full = False
+        for root, dirnames, filenames in os.walk(resolved, followlinks=False):
+            base = Path(root)
+            kept = []
+            for name in dirnames:
+                child = base / name
+                if child.is_symlink() or path_guard.is_protected(str(child)) \
+                        or not path_guard.is_safe_path(str(child)):
+                    continue
+                kept.append(name)
+            dirnames[:] = kept
+            for name, is_dir in [(d, True) for d in kept] + [(f, False) for f in filenames]:
+                seen += 1
+                if fnmatch.fnmatch(name, pattern):
+                    item = base / name
+                    if is_dir or not path_guard.is_protected(str(item)):
+                        if _add(item, is_dir):
+                            full = True
+                            break
+            if full:
+                break
+            if seen > SEARCH_MAX_ENTRIES or time.monotonic() > deadline:
+                truncated = True
                 break
 
-    return {
+    response = {
         "searched_directory": str(resolved),
         "pattern": pattern,
         "matches_count": len(results),
-        "results": results
+        "results": results,
     }
+    if truncated:
+        response["truncated"] = True
+        response["note"] = (
+            "Busca interrompida por limite de tempo/tamanho; refine a pasta ou o padrão "
+            "para ver o resto."
+        )
+    return response
 
 
 def write_file(path: str, content: str, overwrite: bool = True) -> Dict[str, Any]:

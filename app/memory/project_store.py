@@ -53,7 +53,9 @@ class ProjectStore:
         if not updates:
             return False
 
-        updates.append("updated_at = CURRENT_TIMESTAMP")
+        # Local ISO time like create_project, so "ORDER BY updated_at" sorts right.
+        updates.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
         params.append(project_id)
 
         with get_connection() as conn:
@@ -66,8 +68,8 @@ class ProjectStore:
     def set_archived(self, project_id: str, archived: bool) -> bool:
         with get_connection() as conn:
             cur = conn.execute(
-                "UPDATE projects SET archived = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (1 if archived else 0, project_id),
+                "UPDATE projects SET archived = ?, updated_at = ? WHERE id = ?",
+                (1 if archived else 0, datetime.now().isoformat(), project_id),
             )
             return cur.rowcount > 0
 

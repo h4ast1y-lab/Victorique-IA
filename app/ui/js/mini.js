@@ -174,6 +174,15 @@
       if (!response.ok) {
         let detail = `HTTP ${response.status}`;
         try { detail = (await response.json()).detail || detail; } catch (_) { /* ignore */ }
+        if (response.status === 404 && conversationId) {
+          // Apagada na janela grande com esta aberta: a próxima mensagem abre
+          // outra conversa, em vez de falhar para sempre.
+          conversationId = '';
+          savePrefs({ mini_conversation_id: '' });
+          input.value = text;
+          autoGrow();
+          detail = 'Esta conversa foi apagada na janela grande. Envie de novo para começar outra.';
+        }
         throw new Error(detail);
       }
       const reader = response.body.getReader();

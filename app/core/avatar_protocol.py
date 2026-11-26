@@ -155,6 +155,14 @@ class AvatarControlParser:
                 self._after_control = False
                 if not self._buffer:
                     break
+            # Models often open with a blank line or a space before the marker
+            # ("\n[expression:happy]"); without this the marker leaked into the
+            # visible answer. Whitespace before ordinary prose is kept as is.
+            stripped = self._buffer.lstrip()
+            if not stripped:
+                break  # only whitespace so far: wait for more (finish() keeps it)
+            if stripped[0] == "[":
+                self._buffer = stripped
             match = _CONTROL.match(self._buffer)
             if match:
                 end = match.end()

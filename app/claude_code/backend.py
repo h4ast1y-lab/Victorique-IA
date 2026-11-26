@@ -30,7 +30,9 @@ from app.core.deep_thinking import DEEP_THINKING_INSTRUCTIONS, THOUGHT_ONLY_NOTE
 from app.core.dialogue_style import style_note
 from app.core.personality import personality_manager
 from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
+from app.core.transcript import recent_transcript, wrap_with_transcript
 from app.memory.conversation_store import conversation_store
+from app.memory.memory_store import memory_store
 from app.memory.project_store import project_store
 from app.voice import tts_engine
 
@@ -49,12 +51,13 @@ LOGIN_HELP = (
 )
 LOGIN_HINTS = ("login", "authenticat", "api key", "auth", "credential")
 RESUME_NOTICE = (
-    "Não deu para retomar a sessão anterior do Claude Code; comecei uma nova. "
-    "O Claude não verá as mensagens anteriores desta conversa."
+    "Não deu para retomar a sessão anterior do Claude Code; comecei uma nova, com um resumo "
+    "das últimas mensagens desta conversa."
 )
 TOOLS_NOTE = (
-    "FERRAMENTAS DA VICTORIQUE: use buscar_memorias para as preferências e fatos que o "
-    "usuário salvou no app, e buscar_documentos para os documentos que ele indexou.\n"
+    "FERRAMENTAS DA VICTORIQUE: as memórias principais que o usuário salvou no app já vêm "
+    "acima; use buscar_memorias para procurar outras e buscar_documentos para os documentos "
+    "que ele indexou.\n"
     "ORGANIZAR ARQUIVOS (a Biblioteca): para mover, renomear ou descartar arquivos do usuário, "
     "use SEMPRE mover_arquivos, renomear e mandar_para_reserva, nunca Bash, Write ou comandos "
     "de apagar. Antes, leia as pastas (Read, Glob, Grep), monte o plano completo origem → "
@@ -99,6 +102,12 @@ def build_append_prompt(
                 f"Descrição: {project.get('description', '')}\n"
                 f"Dossiê do caso (instruções): {project.get('instructions', '')}"
             )
+    # Saved memories ride in the system prompt. Ranked without the message text
+    # on purpose: the prompt stays identical between turns (cache-friendly) and
+    # buscar_memorias finds the rest on demand.
+    memories = memory_store.get_context_for_prompt(project_id=project_id)
+    if memories:
+        parts.append(memories)
     parts.extend([AVATAR_INSTRUCTIONS, TOOLS_NOTE])
     note = style_note(history or [])
     if note:
@@ -125,6 +134,21 @@ def build_user_content(user_message: str, attachments: Optional[List[Dict[str, A
     if not blocks:
         return text
     blocks.append({"type": "text", "text": text})
+    return blocks
+
+
+def with_transcript(content: Any, transcript: str) -> Any:
+    """The prompt of a NEW session on a conversation that already has messages."""
+    if not transcript:
+        return content
+    if isinstance(content, str):
+        return wrap_with_transcript(transcript, content)
+    blocks = list(content)
+    for index in range(len(blocks) - 1, -1, -1):
+        if blocks[index].get("type") == "text":
+            blocks[index] = {"type": "text", "text": wrap_with_transcript(transcript, blocks[index]["text"])}
+            return blocks
+    blocks.append({"type": "text", "text": wrap_with_transcript(transcript, "")})
     return blocks
 
 
@@ -307,11 +331,11 @@ class ClaudeCodeBackend:
                 logger.debug("disconnect failed: %s", exc)
             turn.client = None
 
-    async def _consume(self, turn: _Turn, prompt: Any, make_options, resume: Optional[str]) -> None:
+    async def _consume(self, turn: _Turn, make_prompt, make_options, resume: Optional[str]) -> None:
         try:
             failure: Optional[BaseException] = None
             try:
-                await self._attempt(turn, prompt, make_options(resume))
+                await self._attempt(turn, make_prompt(resume), make_options(resume))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -320,7 +344,7 @@ class ClaudeCodeBackend:
                 logger.warning("resume %s failed (%s); starting a new session", resume, failure or turn.error)
                 turn.error = None
                 turn.emit({"type": "notice", "message": RESUME_NOTICE})
-                await self._attempt(turn, prompt, make_options(None))
+                await self._attempt(turn, make_prompt(None), make_options(None))
             elif failure:
                 raise failure
         except asyncio.CancelledError:
@@ -376,9 +400,11 @@ class ClaudeCodeBackend:
         bridge = PermissionBridge(emit=queue.put_nowait, conversation_id=conversation_id)
         turn = _Turn(queue.put_nowait, deep_thinking=deep_thinking)
         resume = conversation_store.get_claude_session(conversation_id)
-        append_prompt = build_append_prompt(
-            project_id, personality_id, conversation_store.get_messages(conversation_id, limit=30)
-        )
+        history = conversation_store.get_messages(conversation_id, limit=30)
+        append_prompt = build_append_prompt(project_id, personality_id, history)
+        # A new session (first Claude turn after chatting in another mode, or a
+        # lost session) gets the conversation so far; a resumed one has it.
+        transcript = recent_transcript(history, user_message)
         if deep_thinking:
             append_prompt += "\n\n" + DEEP_THINKING_INSTRUCTIONS
 
@@ -394,8 +420,12 @@ class ClaudeCodeBackend:
                 "type": "meta", "conversation_id": conversation_id, "backend": "claude-code",
             })
             prompt = await asyncio.to_thread(build_user_content, user_message, attachments)
+
+            def make_prompt(resume_id: Optional[str]) -> Any:
+                return prompt if resume_id else with_transcript(prompt, transcript)
+
             consumer = asyncio.create_task(
-                self._consume(turn, prompt, make_options, resume)
+                self._consume(turn, make_prompt, make_options, resume)
             )
             while True:
                 item = await queue.get()

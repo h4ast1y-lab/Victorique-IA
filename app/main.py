@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import settings, DATA_DIR, DOCS_DIR, BASE_DIR, VALID_BACKENDS
-from app.memory.database import init_db, get_connection
+from app.memory.database import init_db, get_connection, get_setting, saved_backend
 from app.memory.conversation_store import conversation_store
 from app.memory.memory_store import memory_store
 from app.memory.project_store import project_store
@@ -209,9 +209,7 @@ class LlamaCppLoadRequest(BaseModel):
 
 
 def _get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
-    with get_connection() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else default
+    return get_setting(key, default)
 
 
 def _set_setting(key: str, value: str):
@@ -231,16 +229,33 @@ def _current_model() -> str:
 
 def _current_backend() -> str:
     """Mode saved from the UI (settings table), else the env/config default."""
-    value = (_get_setting("default_backend", settings.default_backend) or "").strip().lower()
-    return value if value in VALID_BACKENDS else settings.default_backend
+    return saved_backend()
 
+
+LLAMA_MODES = ("llama-cpp", "llama-cpp-server")
 
 # Auto-start do servidor llama.cpp em segundo plano, só quando o modo salvo é
 # local: o modelo pode levar minutos para carregar e a API responde enquanto isso.
-if settings.llama_cpp_auto_start and _current_backend() in ("llama-cpp", "llama-cpp-server"):
+# Each start replaces a llama-server left on the port by an earlier run.
+if settings.llama_cpp_auto_start and _current_backend() in LLAMA_MODES:
     llama_cpp_server.start_in_background(wait_seconds=180)
 # Encerra o llama-server iniciado por este app ao sair (libera a VRAM).
 atexit.register(llama_cpp_server.stop)
+
+
+async def _follow_mode_change(previous: str, backend: str) -> None:
+    """Turns the local server off when leaving llama.cpp mode and on when entering it.
+
+    So every time that mode is switched on it gets a fresh server, with no
+    request left over from before, and the model does not hold the memory
+    while another mode is in use.
+    """
+    was_local = previous in LLAMA_MODES
+    is_local = backend in LLAMA_MODES
+    if was_local and not is_local:
+        await asyncio.to_thread(llama_cpp_server.stop)
+    elif is_local and not was_local and settings.llama_cpp_auto_start:
+        llama_cpp_server.start_in_background(wait_seconds=180)
 
 
 def _claude_sdk_installed() -> bool:
@@ -257,12 +272,18 @@ async def ping():
 
 @app.get("/api/health")
 async def health_check():
-    ollama_ok = await ollama_client.is_alive()
-    ollama_version = await ollama_client.get_version() if ollama_ok else None
-    models = await ollama_client.list_models() if ollama_ok else []
-    names = [m.get("name", "") for m in models]
     active = _current_model()
     backend = _current_backend()
+    # The UI asks every 30 s. Ollama is only probed in Ollama mode: elsewhere
+    # (Claude Code, Codex, llama.cpp) each probe of an absent Ollama cost ~2 s.
+    ollama_ok: Optional[bool] = None
+    ollama_version = None
+    models: List[Dict[str, Any]] = []
+    if backend == "ollama":
+        ollama_version = await ollama_client.get_version()
+        ollama_ok = ollama_version is not None
+        models = await ollama_client.list_models() if ollama_ok else []
+    names = [m.get("name", "") for m in models]
     if backend in ("llama-cpp", "llama-cpp-server"):
         backend_ok = llama_cpp_server.available or llama_cpp_client.available
     elif backend == "claude-code":
@@ -271,7 +292,7 @@ async def health_check():
         from app.codex import backend as codex_module
         backend_ok = codex_module.find_codex() is not None
     else:
-        backend_ok = ollama_ok
+        backend_ok = bool(ollama_ok)
     return {
         "status": "healthy" if backend_ok else "degraded",
         "active_backend": backend,
@@ -318,7 +339,9 @@ async def update_settings(req: SettingsUpdate):
         backend = req.default_backend.strip().lower()
         if backend not in VALID_BACKENDS:
             raise HTTPException(status_code=400, detail="Modo inválido.")
+        previous = _current_backend()
         _set_setting("default_backend", backend)
+        await _follow_mode_change(previous, backend)
     return {
         "status": "updated",
         "default_model": _current_model(),
@@ -451,7 +474,9 @@ async def stt_listen(req: STTListenRequest):
                 "Use /api/stt/transcribe com um arquivo de áudio."
             ),
         )
-    text = stt_engine.ouvir(
+    # Listening blocks for seconds: in a thread, the chat and the UI keep going.
+    text = await asyncio.to_thread(
+        stt_engine.ouvir,
         timeout=req.timeout or 5.0,
         phrase_time_limit=req.phrase_time_limit or 15.0,
     )
@@ -469,7 +494,15 @@ async def stt_transcribe(req: STTTranscribeRequest):
             status_code=503,
             detail="STT não disponível (SpeechRecognition não instalado).",
         )
-    text = stt_engine.transcrever_arquivo(req.file_path)
+    # Same rule as every file tool: only authorized folders, never protected ones.
+    from app.security.path_guard import path_guard
+    try:
+        audio = path_guard.validate_and_resolve(req.file_path, must_exist=True)
+    except (PermissionError, ValueError, FileNotFoundError, OSError) as e:
+        raise HTTPException(status_code=403, detail=f"Arquivo de áudio não permitido: {e}")
+    if not audio.is_file():
+        raise HTTPException(status_code=400, detail="O caminho não é um arquivo de áudio.")
+    text = await asyncio.to_thread(stt_engine.transcrever_arquivo, str(audio))
     if text is None:
         return {"status": "no_speech", "text": ""}
     return {"status": "ok", "text": text}
@@ -489,14 +522,30 @@ async def stt_upload_audio(file: UploadFile = File(...)):
             detail="STT não disponível (SpeechRecognition não instalado).",
         )
     import tempfile
-    suffix = Path(file.filename or "audio.wav").suffix or ".wav"
+    suffix = re.sub(r"[^A-Za-z0-9.]", "", Path(file.filename or "audio.wav").suffix)[:8] or ".wav"
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    written = 0
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp_path = Path(tmp.name)
-        content = await file.read()
-        tmp.write(content)
+        try:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Áudio maior que o limite de {settings.max_upload_mb} MB.",
+                    )
+                tmp.write(chunk)
+        except HTTPException:
+            tmp.close()
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     try:
-        text = stt_engine.transcrever_arquivo(str(tmp_path))
+        text = await asyncio.to_thread(stt_engine.transcrever_arquivo, str(tmp_path))
         if text is None:
             return {"status": "no_speech", "text": ""}
         return {"status": "ok", "text": text}
@@ -512,10 +561,10 @@ async def llama_cpp_status():
 
 @app.post("/api/llama-cpp/load")
 async def llama_cpp_load(req: LlamaCppLoadRequest):
-    if not settings.llama_cpp_enabled:
-        raise HTTPException(status_code=400, detail="llama.cpp está desativado.")
+    # (Used to check settings.llama_cpp_enabled, a setting that never existed:
+    # every call ended in a 500.) Loading takes long and blocks: in a thread.
     n_ctx = req.n_ctx or settings.llama_cpp_n_ctx
-    ok = llama_cpp_client.load_model(req.model_path, n_ctx=n_ctx)
+    ok = await asyncio.to_thread(llama_cpp_client.load_model, req.model_path, n_ctx=n_ctx)
     if not ok:
         raise HTTPException(status_code=400, detail=llama_cpp_client._init_error or "Falha ao carregar modelo.")
     return {"status": "loaded", "model_path": req.model_path, "n_ctx": n_ctx}
@@ -529,7 +578,10 @@ class LlamaCppServerStartRequest(BaseModel):
 @app.get("/api/llama-cpp-server/status")
 async def llama_cpp_server_status():
     # Dispara o auto-start em segundo plano; o status informa "starting".
-    if not llama_cpp_server.available and settings.default_backend == "llama-cpp":
+    # The mode saved from the UI decides (settings.default_backend is only the
+    # env default, so the old check started the server in Claude Code mode).
+    if (not llama_cpp_server.available and settings.llama_cpp_auto_start
+            and _current_backend() in LLAMA_MODES):
         llama_cpp_server.start_in_background(wait_seconds=180)
     return llama_cpp_server.status()
 
@@ -623,6 +675,9 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         raise HTTPException(status_code=400, detail="Projeto não encontrado.")
     if req.personality_id and not personality_manager.get_personality(req.personality_id):
         raise HTTPException(status_code=400, detail="Personalidade não encontrada.")
+    backend = (req.backend or "").strip().lower() or _current_backend()
+    if backend not in VALID_BACKENDS:
+        raise HTTPException(status_code=400, detail="Modo inválido.")
 
     # Check the attachments before creating anything.
     for att_id in req.attachments:
@@ -644,7 +699,6 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(exc))
 
     async def event_generator():
-        backend = req.backend or _current_backend()
         agen = assistant_engine.chat_stream(
             conversation_id=conv["id"],
             user_message=req.message,
@@ -834,19 +888,25 @@ async def get_projects():
 
 @app.post("/api/projects")
 async def create_project(req: ProjectCreate):
-    if not req.name.strip():
+    name = req.name.strip()
+    if not name:
         raise HTTPException(status_code=400, detail="Nome do caso vazio.")
     return project_store.create_project(
-        name=req.name[:120],
+        name=name[:120],
         description=req.description or "",
         instructions=req.instructions or ""
     )
 
 @app.put("/api/projects/{proj_id}")
 async def update_project(proj_id: str, req: ProjectUpdate):
+    name = req.name
+    if name is not None:
+        name = name.strip()[:120]
+        if not name:
+            raise HTTPException(status_code=400, detail="Nome do caso vazio.")
     ok = project_store.update_project(
         project_id=proj_id,
-        name=req.name,
+        name=name,
         description=req.description,
         instructions=req.instructions
     )
@@ -894,9 +954,9 @@ async def upload_document(
     stem = re.sub(r"[^A-Za-z0-9._-]", "_", Path(original).stem)[:80] or "documento"
     save_path = DOCS_DIR / f"{stem}-{uuid.uuid4().hex[:8]}{ext}"
     max_bytes = settings.max_upload_mb * 1024 * 1024
-    written = 0
 
-    try:
+    def _save_upload() -> None:
+        written = 0
         with open(save_path, "wb") as buffer:
             while True:
                 chunk = file.file.read(1024 * 1024)
@@ -909,6 +969,9 @@ async def upload_document(
                         detail=f"Arquivo maior que o limite de {settings.max_upload_mb} MB."
                     )
                 buffer.write(chunk)
+
+    try:
+        await asyncio.to_thread(_save_upload)
     except HTTPException:
         save_path.unlink(missing_ok=True)
         raise
@@ -1312,13 +1375,13 @@ async def list_tools():
 @app.post("/api/backup")
 async def make_backup(req: Optional[BackupCreate] = None):
     try:
-        return create_backup(label=(req.label if req else "manual") or "manual")
+        return await asyncio.to_thread(create_backup, (req.label if req else "manual") or "manual")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Falha ao criar backup: {e}")
 
 @app.get("/api/backups")
 async def get_backups():
-    return list_backups()
+    return await asyncio.to_thread(list_backups)
 
 @app.get("/api/backups/{name}")
 async def download_backup(name: str):
@@ -1331,11 +1394,16 @@ async def download_backup(name: str):
 @app.post("/api/backup/restore")
 async def restore(req: BackupRestoreRequest):
     try:
-        result = restore_backup(req.name, confirm=req.confirm)
+        result = await asyncio.to_thread(restore_backup, req.name, req.confirm)
         # An older backup may predate newer columns (e.g. messages.reasoning).
-        init_db()
+        await asyncio.to_thread(init_db)
         # Pending actions from the previous database state must not survive.
         security_manager.pending_actions.clear()
+        # The restored file carries its own preferences (turbo mode, generation
+        # limits, models...): drop the cached copy and apply them now, not at
+        # the next restart.
+        preferences.invalidate_cache()
+        preferences.apply_to_settings()
         return result
     except PermissionError as e:
         raise HTTPException(status_code=400, detail=str(e))

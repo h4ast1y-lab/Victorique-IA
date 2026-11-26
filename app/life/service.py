@@ -119,9 +119,12 @@ class LifeService:
     def _context(self, prefs: Dict[str, Any], ui: Dict[str, Any], category: str):
         from app.core.personality import personality_manager
         backend = str(ui.get("backend") or "").strip().lower()
+        if not backend:  # the page had not loaded its mode yet
+            from app.memory.database import saved_backend
+            backend = saved_backend()
         profile_id = ui.get("personality_id")
         profile = personality_manager.get_personality(profile_id) if profile_id else None
-        mode = "claude-code" if backend == "claude-code" else "local"
+        mode = backend if backend in ("claude-code", "codex") else "local"
         persona = personality_manager.build_system_prompt(profile, mode=mode)
         extra: Dict[str, Any] = {"nome": prefs.get("user_name", "")}
         if category == "tedio":

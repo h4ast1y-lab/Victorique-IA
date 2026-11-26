@@ -213,7 +213,10 @@ Variáveis de ambiente para instalação portátil/testes:
 
 O `llama-server` sobe em segundo plano (a API responde enquanto o modelo carrega;
 `/api/llama-cpp-server/status` mostra `starting`), é encerrado junto com o app e grava
-a saída em `data/llama-server.log`.
+a saída em `data/llama-server.log`. Cada vez que a IA local é ligada (ao abrir o app no
+modo llama.cpp ou ao trocar para ele), um `llama-server` que tenha ficado aberto na
+porta é encerrado e um novo sobe no lugar, sem pedidos antigos. Ao trocar para outro
+modo, o servidor é desligado e libera a memória.
 
 **Nunca apague `data/assistant.db` sem backup.** Faça backup antes de qualquer
 manutenção.

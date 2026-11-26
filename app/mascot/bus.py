@@ -53,15 +53,17 @@ class MascotBus:
 
     def say(self, event: Dict[str, Any]) -> bool:
         """A "vida própria" line for her balloon. False when she is not there."""
-        if not self.active:
+        mascot = self.mascot  # read once: the mascot may detach in between
+        if not (mascot and mascot.enabled):
             return False
-        self.mascot.post("say", event)
+        mascot.post("say", event)
         return True
 
     def reply(self, text: str) -> bool:
-        if not self.active:
+        mascot = self.mascot
+        if not (mascot and mascot.enabled):
             return False
-        self.mascot.post("reply", text)
+        mascot.post("reply", text)
         return True
 
     def command(self, action: str) -> bool:

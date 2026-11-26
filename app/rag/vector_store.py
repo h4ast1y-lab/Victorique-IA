@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -124,8 +125,9 @@ class VectorStore:
         holding a database lock during slow model calls.
         """
         path = Path(file_path).resolve()
-        pages = document_loader.load(str(path))
-        chunks = text_splitter.split_pages(pages)
+        # Parsing (PDF, Office, OCR) is slow and blocking: keep it off the event loop.
+        pages = await asyncio.to_thread(document_loader.load, str(path))
+        chunks = await asyncio.to_thread(text_splitter.split_pages, pages)
 
         if not chunks:
             raise ValueError(
@@ -150,6 +152,21 @@ class VectorStore:
             embedded_chunks.append((ch, vector or []))
         search_mode = "semantic" if any(v for _, v in embedded_chunks) else "keyword"
 
+        await asyncio.to_thread(self._insert_document, doc_id, title, path, ext, pages,
+                                chunks, collection, project_id, embedded_chunks)
+
+        return {
+            "id": doc_id,
+            "title": title,
+            "total_pages": len(pages),
+            "total_chunks": len(chunks),
+            "collection": collection,
+            "search_mode": search_mode,
+        }
+
+    @staticmethod
+    def _insert_document(doc_id, title, path, ext, pages, chunks, collection, project_id,
+                         embedded_chunks) -> None:
         with get_connection() as conn:
             conn.execute(
                 """
@@ -169,15 +186,6 @@ class VectorStore:
                     (chunk_id, doc_id, ch["chunk_index"], ch["page"], ch["text"], json.dumps(vector))
                 )
 
-        return {
-            "id": doc_id,
-            "title": title,
-            "total_pages": len(pages),
-            "total_chunks": len(chunks),
-            "collection": collection,
-            "search_mode": search_mode,
-        }
-
     async def search(
         self,
         query: str,
@@ -191,8 +199,18 @@ class VectorStore:
         Falls back to keyword search for chunks without an embedding, or for
         every chunk when Ollama cannot embed the query.
         """
-        query_vec = await _try_embedding(query)
+        rows = await asyncio.to_thread(self._candidate_rows, project_id, collection)
+        if not rows:
+            # Nothing indexed for this scope: no reason to wake Ollama (on a
+            # Claude-only machine that call alone cost seconds per message).
+            return []
+        # Only documents indexed with embeddings need the query embedded.
+        needs_vector = any((r["embedding_json"] or "[]").strip() not in ("", "[]") for r in rows)
+        query_vec = await _try_embedding(query) if needs_vector else None
+        return await asyncio.to_thread(self._score_rows, rows, query, query_vec, top_k, min_score)
 
+    @staticmethod
+    def _candidate_rows(project_id: Optional[str], collection: Optional[str]) -> List[Any]:
         sql = """
             SELECT c.id, c.document_id, c.page_number, c.content, c.embedding_json,
                    d.title as doc_title, d.file_path, d.collection
@@ -211,38 +229,20 @@ class VectorStore:
         if collection:
             sql += " AND d.collection = ?"
             params.append(collection)
-
-        scored_results = []
         with get_connection() as conn:
-            rows = conn.execute(sql, params).fetchall()
-            for r in rows:
-                try:
-                    chunk_vec = json.loads(r["embedding_json"] or "[]")
-                    if not query_vec or not chunk_vec or len(chunk_vec) != len(query_vec):
-                        score = _keyword_score(query, r["content"])
-                        if score > 0:
-                            scored_results.append({
-                                "chunk_id": r["id"],
-                                "document_id": r["document_id"],
-                                "document_title": r["doc_title"],
-                                "file_path": r["file_path"],
-                                "page": r["page_number"],
-                                "content": r["content"],
-                                "score": score,
-                                "similarity": None,
-                            })
-                        continue
+            return conn.execute(sql, params).fetchall()
 
-                    sim = cosine_similarity(query_vec, chunk_vec)
-                    
-                    if getattr(settings, "rag_hybrid_search", True):
-                        lex = _lexical_score(query, r["content"])
-                        # Fusão híbrida ponderada: 70% semântica vetorial, 30% correspondência léxica exata
-                        final_score = 0.7 * sim + 0.3 * lex
-                    else:
-                        final_score = sim
-
-                    if final_score >= min_score or (getattr(settings, "rag_hybrid_search", True) and sim >= min_score):
+    @staticmethod
+    def _score_rows(rows, query: str, query_vec: Optional[List[float]], top_k: int,
+                    min_score: float) -> List[Dict[str, Any]]:
+        hybrid = getattr(settings, "rag_hybrid_search", True)
+        scored_results = []
+        for r in rows:
+            try:
+                chunk_vec = json.loads(r["embedding_json"] or "[]")
+                if not query_vec or not chunk_vec or len(chunk_vec) != len(query_vec):
+                    score = _keyword_score(query, r["content"])
+                    if score > 0:
                         scored_results.append({
                             "chunk_id": r["id"],
                             "document_id": r["document_id"],
@@ -250,11 +250,31 @@ class VectorStore:
                             "file_path": r["file_path"],
                             "page": r["page_number"],
                             "content": r["content"],
-                            "score": round(final_score, 4),
-                            "similarity": round(sim, 4),
+                            "score": score,
+                            "similarity": None,
                         })
-                except Exception as e:
-                    logger.debug(f"Error calculating similarity: {e}")
+                    continue
+
+                sim = cosine_similarity(query_vec, chunk_vec)
+                if hybrid:
+                    # 70% semântica vetorial, 30% correspondência léxica exata
+                    final_score = 0.7 * sim + 0.3 * _lexical_score(query, r["content"])
+                else:
+                    final_score = sim
+
+                if final_score >= min_score or (hybrid and sim >= min_score):
+                    scored_results.append({
+                        "chunk_id": r["id"],
+                        "document_id": r["document_id"],
+                        "document_title": r["doc_title"],
+                        "file_path": r["file_path"],
+                        "page": r["page_number"],
+                        "content": r["content"],
+                        "score": round(final_score, 4),
+                        "similarity": round(sim, 4),
+                    })
+            except Exception as e:
+                logger.debug(f"Error calculating similarity: {e}")
 
         scored_results.sort(key=lambda x: x["score"], reverse=True)
         return scored_results[:top_k]

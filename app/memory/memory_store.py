@@ -71,9 +71,7 @@ class MemoryStore:
             else:
                 query += " AND project_id = ?"
             params.append(project_id)
-        elif include_global is False and project_id is None:
-            # No project selected: only global memories for prompt context.
-            pass
+        # project_id None: every memory (the Memórias screen filters by case).
         if category:
             query += " AND category = ?"
             params.append(category)
@@ -142,7 +140,7 @@ class MemoryStore:
         Without a project: only global memories (never another project's data).
         When user_query is provided and there are many memories, ranks by relevance.
         """
-        limit = max_items or 6
+        limit = max_items or 10
         with get_connection() as conn:
             if project_id:
                 rows = conn.execute(
@@ -162,19 +160,20 @@ class MemoryStore:
         if not memories:
             return ""
 
-        # Se houver mais memórias que o limite e tivermos uma query do usuário,
-        # ordenamos pela relevância léxica com a query para economizar janela de contexto.
-        if len(memories) > limit and user_query:
+        # Over the limit: standing rules (instructions, preferences) never drop
+        # out; then memories of the open case; then lexical relevance to the
+        # message. sort() is stable, so ties keep the newest first.
+        if len(memories) > limit:
             import re
-            query_terms = [w.lower() for w in re.findall(r"\w+", user_query) if len(w) >= 3]
-            def _score_mem(m):
-                text = (m["content"] + " " + m["category"]).lower()
-                matches = sum(1 for t in query_terms if t in text)
-                return matches
+            query_terms = [w.lower() for w in re.findall(r"\w+", user_query or "") if len(w) >= 3]
 
-            memories.sort(key=_score_mem, reverse=True)
-            memories = memories[:limit]
-        elif len(memories) > limit:
+            def _rank(m):
+                text = (m["content"] + " " + m["category"]).lower()
+                standing = m["category"] in ("instruction", "preference")
+                own_case = bool(project_id) and m.get("project_id") == project_id
+                return (standing, own_case, sum(1 for t in query_terms if t in text))
+
+            memories.sort(key=_rank, reverse=True)
             memories = memories[:limit]
 
         lines = ["MEMÓRIAS PERSISTENTES AUTORIZADAS PELO USUÁRIO:"]

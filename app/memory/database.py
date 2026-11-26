@@ -1,20 +1,64 @@
-import sqlite3
-import json
 import logging
-from datetime import datetime
-from pathlib import Path
-from typing import Optional, List, Dict, Any
+import sqlite3
+from typing import Optional
 
 from app.config import DB_PATH
 
 logger = logging.getLogger("database")
 
+class _ClosingConnection(sqlite3.Connection):
+    """``with get_connection() as conn:`` commits (or rolls back) AND closes.
+
+    The stock sqlite3 context manager only ends the transaction, so every
+    ``with`` block used to leak an open file handle until garbage collection.
+    """
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            self.close()
+
+
+_wal_ready_for: Optional[str] = None
+
+
+def _ensure_wal(conn: sqlite3.Connection) -> None:
+    """WAL is a property of the database file: set it once per file, not per connection."""
+    global _wal_ready_for
+    key = str(DB_PATH)
+    if _wal_ready_for != key:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        _wal_ready_for = key
+
+
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH), timeout=20.0)
+    conn = sqlite3.connect(str(DB_PATH), timeout=20.0, factory=_ClosingConnection)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
+    _ensure_wal(conn)
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
+
+def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    """A value of the ``settings`` table (default when absent or unreadable)."""
+    try:
+        with get_connection() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    except sqlite3.Error:
+        return default
+    return row["value"] if row else default
+
+
+def saved_backend() -> str:
+    """The mode chosen in the UI, else the env/config default.
+
+    One source of truth for run.py (whether to start Ollama), the API and the
+    spontaneous lines (app/life), which used to read it each in its own way.
+    """
+    from app.config import VALID_BACKENDS, settings
+    value = (get_setting("default_backend", settings.default_backend) or "").strip().lower()
+    return value if value in VALID_BACKENDS else settings.default_backend
+
 
 # Additive, idempotent column migrations: (table, column, SQL type).
 # Never drop or rename here; existing databases must keep working.

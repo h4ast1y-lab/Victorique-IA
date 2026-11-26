@@ -121,6 +121,8 @@ except Exception as exc:  # pragma: no cover - depends on environment
     _STT_AVAILABLE = False
     _STT_IMPORT_ERROR = exc
 
+_MIC_LOCK = threading.Lock()
+
 
 class STTEngine:
     """Reconhecimento de fala local (offline).
@@ -181,6 +183,11 @@ class STTEngine:
         if not self.available or self._microphone is None:
             logger.warning("STT/microfone não disponível para ouvir().")
             return None
+        # One shared Microphone object: a second listen at the same time (now
+        # that listening runs in a worker thread) would fail inside PyAudio.
+        if not _MIC_LOCK.acquire(blocking=False):
+            logger.info("Microfone já em uso; pedido de ditado ignorado.")
+            return None
         try:
             with self._microphone as source:
                 self._recognizer.adjust_for_ambient_noise(source, duration=0.5)
@@ -191,6 +198,8 @@ class STTEngine:
         except Exception as exc:  # pragma: no cover - depends on environment
             logger.error(f"Erro ao ouvir microfone: {exc}")
             return None
+        finally:
+            _MIC_LOCK.release()
 
     def transcrever_arquivo(self, file_path: str) -> Optional[str]:
         """Transcreve um arquivo de áudio (WAV, MP3, etc.)."""

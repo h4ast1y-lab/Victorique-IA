@@ -33,15 +33,15 @@ from app.core.deep_thinking import DEEP_THINKING_INSTRUCTIONS, THOUGHT_ONLY_NOTE
 from app.core.dialogue_style import style_note
 from app.core.personality import personality_manager
 from app.core.sse import CANCELLED_MARKER, NO_TEXT_FALLBACK, sse_event, truncate
+from app.core.transcript import HISTORY_MESSAGES, recent_transcript, wrap_with_transcript
 from app.library import activity
 from app.memory.conversation_store import conversation_store
+from app.memory.memory_store import memory_store
 from app.memory.project_store import project_store
 
 logger = logging.getLogger("codex.backend")
 
 TRACE_RESULT_CHARS = 1500
-HISTORY_MESSAGES = 12
-HISTORY_CHARS = 1200
 STDERR_LINES = 30
 _THREAD_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
@@ -136,6 +136,22 @@ def _popen(cmd: List[str], cwd: str) -> Any:
     )
 
 
+def _kill_tree(process: Any) -> None:
+    """Stops the CLI and its children: node runs the native codex binary as a
+    child, and process.kill() alone left that one running on Windows."""
+    pid = getattr(process, "pid", None)
+    if os.name == "nt" and isinstance(pid, int):
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                           timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            pass
+    try:
+        process.kill()
+    except Exception:
+        pass
+
+
 def friendly_error(error: Any) -> str:
     text = str(error).strip() or error.__class__.__name__
     if any(hint in text.lower() for hint in LOGIN_HINTS):
@@ -149,7 +165,7 @@ def _valid_thread(thread_id: Optional[str]) -> Optional[str]:
 
 # ----------------- Prompt -----------------
 def _instructions(project_id: Optional[str], personality: Optional[Dict[str, Any]],
-                  history: List[Dict[str, Any]], deep_thinking: bool) -> str:
+                  history: List[Dict[str, Any]], deep_thinking: bool, user_message: str = "") -> str:
     parts = [personality_manager.build_system_prompt(personality, mode="codex")]
     if project_id:
         project = project_store.get_project(project_id)
@@ -159,6 +175,10 @@ def _instructions(project_id: Optional[str], personality: Optional[Dict[str, Any
                 f"Descrição: {project.get('description', '')}\n"
                 f"Dossiê do caso (instruções): {project.get('instructions', '')}"
             )
+    # Codex has no buscar_memorias tool: the saved memories go with the session start.
+    memories = memory_store.get_context_for_prompt(project_id=project_id, user_query=user_message)
+    if memories:
+        parts.append(memories)
     parts.extend([AVATAR_INSTRUCTIONS, CODEX_NOTE])
     note = style_note(history)
     if note:
@@ -170,17 +190,7 @@ def _instructions(project_id: Optional[str], personality: Optional[Dict[str, Any
 
 def _transcript(history: List[Dict[str, Any]], user_message: str) -> str:
     """The last messages before this one, so a new session isn't blind."""
-    prior = list(history)
-    if prior and prior[-1].get("role") == "user" and prior[-1].get("content") == user_message:
-        prior = prior[:-1]
-    lines = []
-    for message in prior[-HISTORY_MESSAGES:]:
-        who = "Usuário" if message.get("role") == "user" else "Você"
-        text = truncate(str(message.get("content") or ""), HISTORY_CHARS)
-        if message.get("attachments"):
-            text = (text + " " + chat_attachments.history_note(message["attachments"])).strip()
-        lines.append(f"{who}: {text}")
-    return "\n\n".join(lines)
+    return recent_transcript(history, user_message)
 
 
 def build_prompt(user_message: str, project_id: Optional[str], personality_id: Optional[str],
@@ -196,13 +206,13 @@ def build_prompt(user_message: str, project_id: Optional[str], personality_id: O
         return "\n\n".join(parts)
     text = (
         "<instrucoes_do_aplicativo>\n"
-        f"{_instructions(project_id, personality, history, deep_thinking)}\n"
+        f"{_instructions(project_id, personality, history, deep_thinking, user_message)}\n"
         "</instrucoes_do_aplicativo>\n\n"
     )
     transcript = _transcript(history, user_message)
-    if transcript:
-        text += f"<conversa_ate_aqui>\n{transcript}\n</conversa_ate_aqui>\n\n"
-    return text + f"MENSAGEM DO USUÁRIO:\n{user_message}{tail}"
+    if not transcript:
+        return text + f"MENSAGEM DO USUÁRIO:\n{user_message}{tail}"
+    return text + wrap_with_transcript(transcript, f"{user_message}{tail}")
 
 
 # ----------------- The Biblioteca -----------------
@@ -553,10 +563,7 @@ class CodexBackend:
         except (GeneratorExit, asyncio.CancelledError):
             if not finished:
                 if process is not None:
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
+                    _kill_tree(process)
                 partial = turn.text().strip()
                 if partial or turn.router.thought:
                     self._save(conversation_id, partial + CANCELLED_MARKER, turn)

@@ -44,10 +44,13 @@ class ConversationStore:
             return [dict(r) for r in rows]
 
     def update_title(self, conv_id: str, new_title: str) -> bool:
+        # Same clock and format as create/add_message (local ISO), or the
+        # "ORDER BY updated_at" of the sidebar mixes UTC "YYYY-MM-DD HH:MM:SS"
+        # with local "YYYY-MM-DDTHH:MM:SS" and sorts renamed chats wrongly.
         with get_connection() as conn:
             cur = conn.execute(
-                "UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (new_title, conv_id)
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                (new_title, datetime.now().isoformat(), conv_id)
             )
             return cur.rowcount > 0
 
@@ -142,7 +145,10 @@ class ConversationStore:
             "created_at": now
         }
 
-    def get_messages(self, conversation_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_messages(self, conversation_id: str, limit: Optional[int] = 100) -> List[Dict[str, Any]]:
+        """Most recent ``limit`` messages in chronological order (None = all)."""
+        if limit is None or limit <= 0:
+            limit = -1  # SQLite: no limit
         with get_connection() as conn:
             # Take the most recent N messages, then present them chronologically.
             rows = conn.execute(
@@ -186,15 +192,17 @@ class ConversationStore:
     def search_conversations(
         self, query: str, project_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
+        # % and _ typed by the user are literal text, not wildcards.
+        escaped = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        q = f"%{escaped}%"
         with get_connection() as conn:
-            q = f"%{query}%"
             if project_id:
                 rows = conn.execute(
                     """
                     SELECT DISTINCT c.id, c.title, c.updated_at
                     FROM conversations c
                     LEFT JOIN messages m ON c.id = m.conversation_id
-                    WHERE (c.title LIKE ? OR m.content LIKE ?) AND c.project_id = ?
+                    WHERE (c.title LIKE ? ESCAPE '!' OR m.content LIKE ? ESCAPE '!') AND c.project_id = ?
                     ORDER BY c.updated_at DESC
                     """,
                     (q, q, project_id)
@@ -205,7 +213,7 @@ class ConversationStore:
                     SELECT DISTINCT c.id, c.title, c.updated_at
                     FROM conversations c
                     LEFT JOIN messages m ON c.id = m.conversation_id
-                    WHERE (c.title LIKE ? OR m.content LIKE ?) AND c.project_id IS NULL
+                    WHERE (c.title LIKE ? ESCAPE '!' OR m.content LIKE ? ESCAPE '!') AND c.project_id IS NULL
                     ORDER BY c.updated_at DESC
                     """,
                     (q, q)
@@ -216,7 +224,7 @@ class ConversationStore:
         conv = self.get_conversation(conversation_id)
         if not conv:
             raise ValueError("Conversation not found")
-        messages = self.get_messages(conversation_id)
+        messages = self.get_messages(conversation_id, limit=None)  # the whole chat
 
         if export_format == "json":
             return json.dumps({"conversation": conv, "messages": messages}, indent=2, ensure_ascii=False)

@@ -146,6 +146,8 @@ def get_system_metrics() -> Dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=3,
+            # Under pythonw (no console) every call flashed a console window.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if res.returncode == 0 and res.stdout.strip():
             parts = [p.strip() for p in res.stdout.strip().split(",")]

@@ -15,7 +15,6 @@ executavel ``llama-server.exe`` ja compilado em C:\\Users\\Usuário\\llama.cpp\\
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -266,71 +265,104 @@ class LlamaCppServerClient:
         self.start_in_background()
         return True
 
-    def _running_n_ctx(self) -> Optional[int]:
-        """O ``n_ctx`` do servidor que está respondendo na porta, se ele disser."""
-        try:
-            r = httpx.get(f"{self._base_url}/props", timeout=2.0)
-            if r.status_code != 200:
-                return None
-            settings = r.json().get("default_generation_settings") or {}
-            value = settings.get("n_ctx")
-            return int(value) if value else None
-        except Exception:
-            return None
-
-    def _kill_orphan_on_port(self) -> bool:
-        """Encerra um llama-server órfão (de uma execução anterior) na porta.
-
-        Só mata processos cujo executável se chama ``llama-server``; qualquer
-        outro programa na porta é deixado em paz.
-        """
+    def _listening_pids(self) -> set:
+        """PIDs escutando na porta do servidor (Windows, via ``netstat``)."""
         if os.name != "nt":
-            return False
-        no_window = subprocess.CREATE_NO_WINDOW
+            return set()
         try:
             out = subprocess.run(
-                ["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
-                timeout=10, creationflags=no_window,
+                ["netstat", "-ano"], capture_output=True, text=True, errors="replace",
+                timeout=10, creationflags=subprocess.CREATE_NO_WINDOW,
             ).stdout
         except Exception:
-            return False
+            return set()
         pids = set()
         for line in out.splitlines():
             parts = line.split()
-            if len(parts) >= 5 and parts[3].upper() == "LISTENING" and parts[1].endswith(f":{self.port}"):
-                pids.add(parts[4])
-        killed = False
-        for pid in pids:
+            # TCP  127.0.0.1:8899  0.0.0.0:0  LISTENING  1234
+            if len(parts) < 5 or not parts[0].upper().startswith("TCP"):
+                continue
+            if not parts[1].endswith(f":{self.port}"):
+                continue
+            # The state word is translated on some Windows languages; a
+            # listening socket is also the one with no remote port.
+            listening = parts[3].upper() == "LISTENING" or parts[2].endswith(":0")
+            if listening and parts[-1].isdigit() and parts[-1] != "0":
+                pids.add(parts[-1])
+        return pids
+
+    def _is_server_process(self, pid: str) -> bool:
+        """O processo ``pid`` é um llama-server (pelo nome do executável)?"""
+        try:
+            info = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, errors="replace", timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            ).stdout.lower()
+        except Exception:
+            return False
+        names = {"llama-server", self.server_exe.stem.lower()}
+        return any(f'"{name}.exe"' in info or f'"{name}"' in info for name in names if name)
+
+    def _kill_orphan_on_port(self) -> bool:
+        """Encerra o llama-server que ficou na porta de uma execução anterior.
+
+        Um servidor deixado para trás (o app fechou à força, travou ou outro
+        Victorique o abriu) pode continuar ocupado com pedidos antigos, então
+        ele nunca é reaproveitado. Só mata processos cujo executável é o
+        llama-server; qualquer outro programa na porta é deixado em paz.
+        Retorna True quando algum foi encerrado e a porta ficou livre.
+        """
+        if os.name != "nt":
+            return False
+        victims = [pid for pid in self._listening_pids() if self._is_server_process(pid)]
+        if not victims:
+            return False
+        for pid in victims:
             try:
-                info = subprocess.run(
-                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                    capture_output=True, text=True, timeout=10, creationflags=no_window,
-                ).stdout.lower()
-                if "llama-server" not in info:
-                    continue
-                subprocess.run(["taskkill", "/PID", pid, "/F"], capture_output=True,
-                               timeout=10, creationflags=no_window)
-                killed = True
+                subprocess.run(
+                    ["taskkill", "/PID", pid, "/F"], capture_output=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
             except Exception:
                 continue
-        if killed:
-            for _ in range(20):
-                if not self.is_alive():
-                    break
-                time.sleep(0.25)
-        return killed
+        # TerminateProcess is asynchronous: wait for the port to be released,
+        # or the new server fails to bind it.
+        for _ in range(40):
+            if not set(victims) & self._listening_pids():
+                return True
+            time.sleep(0.25)
+        logger.warning("llama-server antigo (PID %s) não liberou a porta %s",
+                       ", ".join(victims), self.port)
+        return False
 
     def _start_locked(self, wait_seconds: int) -> bool:
-        if self.is_alive():
-            running = self._running_n_ctx() if self._proc is None else None
-            if running is not None and running != self.n_ctx and self._kill_orphan_on_port():
-                logger.info("llama-server órfão com n_ctx=%s encerrado; subindo com %s",
-                            running, self.n_ctx)
-            else:
+        if self._proc is not None:
+            # The server this app started in this run: reuse it while it is
+            # alive and answering (another caller may have just started it).
+            if self._proc.poll() is None and self.is_alive():
                 self._available = True
                 self._init_error = None
-                logger.info("llama-server já está rodando em %s", self._base_url)
                 return True
+            logger.warning("llama-server deste app parou de responder; reiniciando")
+            self.stop()
+
+        # Turning the AI on always starts a fresh server: one left on the port
+        # by an earlier run may still be busy with old requests. It is only
+        # closed when a new one can take its place.
+        can_spawn = self.server_exe.is_file() and self.model_path.is_file()
+        if can_spawn and self._kill_orphan_on_port():
+            logger.info("llama-server antigo na porta %s encerrado; subindo um novo", self.port)
+        elif self.is_alive():
+            # It could not be replaced (another program on the port, no
+            # permission, or no exe/model to start ours): use it, not fail.
+            self._available = True
+            self._init_error = None
+            logger.warning(
+                "Não foi possível reiniciar o servidor em %s; usando o que já está no ar",
+                self._base_url,
+            )
+            return True
 
         if not self.server_exe.is_file():
             self._init_error = f"llama-server.exe não encontrado: {self.server_exe}"
@@ -359,12 +391,17 @@ class LlamaCppServerClient:
             logger.error(self._init_error)
             return False
 
+        proc = self._proc
         deadline = time.time() + wait_seconds
         while time.time() < deadline:
-            if self._proc.poll() is not None:
+            if self._proc is not proc:
+                # stop() ran while the model loaded (mode switched, app closing).
+                logger.info("Início do llama-server cancelado")
+                return False
+            if proc.poll() is not None:
                 # Processo encerrou antes de ficar saudável.
                 self._init_error = (
-                    f"llama-server encerrou inesperadamente (código {self._proc.returncode})"
+                    f"llama-server encerrou inesperadamente (código {proc.returncode})"
                     + (f"; veja {self.log_path}" if self.log_path else "")
                 )
                 logger.error(self._init_error)
@@ -391,18 +428,20 @@ class LlamaCppServerClient:
 
     def stop(self):
         """Para o servidor llama-server se foi iniciado por este cliente."""
-        if self._proc is not None:
+        # Cleared first, so a start still waiting for this process to load
+        # sees it was cancelled instead of reporting a crash.
+        proc, self._proc = self._proc, None
+        self._available = False
+        if proc is not None:
             try:
-                self._proc.terminate()
+                proc.terminate()
                 try:
-                    self._proc.wait(timeout=10)
+                    proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    self._proc.kill()
+                    proc.kill()
             except Exception as exc:  # pragma: no cover - best effort
                 logger.warning("Erro ao parar llama-server: %s", exc)
-            self._proc = None
         self._close_log()
-        self._available = False
 
     # ------------------------------------------------------------------
     # HTTP API

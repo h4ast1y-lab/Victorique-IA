@@ -183,8 +183,12 @@ async def _ask_local(system: str, user: str, backend: str) -> str:
 async def ask_model(system: str, user: str, backend: str) -> str:
     if backend == "claude-code":
         coro = _ask_claude(system, user)
-    else:
+    elif backend in ("ollama", "llama-cpp", "llama-cpp-server"):
         coro = _ask_local(system, user, backend)
+    else:
+        # Codex (or an unknown mode) has no quick text call: the line comes
+        # from the bank, instead of from a llama-server left running elsewhere.
+        raise RuntimeError(f"o modo {backend or 'atual'} não escreve falas espontâneas")
     return await asyncio.wait_for(coro, timeout=MODEL_TIMEOUT)
 
 

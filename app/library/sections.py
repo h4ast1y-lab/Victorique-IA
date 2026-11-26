@@ -14,6 +14,7 @@ pastas do sistema e as do próprio aplicativo.
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -94,10 +95,30 @@ def default_folders() -> List[Tuple[str, str, Path]]:
 
 
 # ----------------- Storage -----------------
-def _load() -> Dict[str, Any]:
+# Every tool call and every moved file asks section_for(); a batch of 500 moves
+# used to read and parse library.json 500 times. The parsed copy is reused
+# while the file is unchanged (same path, size and modification time).
+_cache: Dict[str, Any] = {"key": None, "data": None}
+
+
+def _file_key(path: Path):
     try:
-        data = json.loads(_store_path().read_text(encoding="utf-8"))
+        info = path.stat()
+    except OSError:
+        return None
+    return (str(path), info.st_mtime_ns, info.st_size)
+
+
+def _load() -> Dict[str, Any]:
+    path = _store_path()
+    key = _file_key(path)
+    if key is not None and _cache["key"] == key:
+        return copy.deepcopy(_cache["data"])
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict) and isinstance(data.get("sections"), list):
+            if key is not None:
+                _cache["key"], _cache["data"] = key, copy.deepcopy(data)
             return data
     except FileNotFoundError:
         pass
@@ -112,6 +133,8 @@ def _save(data: Dict[str, Any]) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+    key = _file_key(path)
+    _cache["key"], _cache["data"] = (key, copy.deepcopy(data)) if key else (None, None)
 
 
 def _seeded(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -278,8 +301,10 @@ def section_for(raw_path: Optional[str]) -> Optional[str]:
         path = Path(str(raw_path)).expanduser().resolve()
     except Exception:
         return None
+    with _lock:
+        visible = [sec for sec in _seeded(_load())["sections"] if not sec.get("hidden")]
     best, depth = None, -1
-    for section in list_sections():
+    for section in visible:  # no is_dir() per section: only the path matters here
         root = Path(section["path"]).resolve()
         if _within(path, root) and len(root.parts) > depth:
             best, depth = section["id"], len(root.parts)
