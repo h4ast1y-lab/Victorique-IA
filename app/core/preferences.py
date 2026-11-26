@@ -61,6 +61,10 @@ SCHEMA: Dict[str, tuple] = {
     "mascot_replies": ("bool", True, None),
     "mascot_hide_fullscreen": ("bool", True, None),
     "mascot_keep_on_close": ("bool", True, None),
+    # Inside Spotify: she walks on its player bar, panels, tabs and covers (app/spotify).
+    "spotify_enabled": ("bool", True, None),
+    # She comments on the track playing (through the vida própria's gates).
+    "spotify_comments": ("bool", True, None),
     # Conversation used by the small chat opened by clicking her on the desktop.
     "mini_conversation_id": ("str", "", 64),
     # --- Vida própria (spontaneous lines; app/life) ---

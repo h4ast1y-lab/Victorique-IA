@@ -6,7 +6,8 @@ Quando a variação pelo modelo está ligada, estas falas servem de reserva e de
 
 Marcadores que o app preenche: {nome} (seu nome, se informado), {hora}, {pasta},
 {n} (quantidade de arquivos), {tipos} (extensões mais comuns), {minutos}
-(tempo fora, já por extenso) e {descricao}.
+(tempo fora, já por extenso), {descricao} e, na seção "musica", {musica}, {artista}
+e {album} (o que toca no Spotify).
 
 Na seção "tedio", cada linha tem três partes separadas por " :: ": o título do Caso,
 a fala e a pergunta que o Caso vai investigar (esta última é opcional).
@@ -44,3 +45,10 @@ a fala e a pergunta que o Caso vai investigar (esta última é opcional).
 - A ponte de quatro viajantes :: Distraia-me. Quatro viajantes cruzam uma ponte à noite com uma só lanterna, no máximo dois por vez, levando 1, 2, 5 e 10 minutos. Dá para todos passarem em 17 minutos? Prove. :: Como os quatro viajantes (1, 2, 5 e 10 minutos) cruzam a ponte com uma lanterna em 17 minutos?
 - As duas portas :: Que lentidão tem o mundo hoje. Duas portas, dois guardas: um sempre mente, o outro sempre diz a verdade. Uma só pergunta, e você precisa achar a porta certa. Qual pergunta faria? :: Que única pergunta revela a porta certa quando um guarda sempre mente e o outro sempre diz a verdade?
 - Um assunto pendente :: Estou entediada a ponto de arrumar meus próprios livros. Há algum assunto que você vive adiando estudar? Diga, e eu monto o Caso. :: Qual assunto eu vivo adiando estudar, e por onde começar?
+
+## musica
+- *inclina a cabeça* {musica}, de {artista}. Escolha curiosa. Não direi se aprovo; deduza pela minha cara.
+- Então é {musica} agora. A trilha que alguém escolhe diz muito sobre quem escolhe, sabia?
+- {artista}. Hmph. Há quem leia ouvindo música. Eu deduzo ouvindo música.
+- Música de fundo para pensar: {musica}. Aprovada, com ressalvas que guardo para mim.
+- *batuca na lombada do livro* {musica}… Até as estantes da torre ficam menos caladas com isso.

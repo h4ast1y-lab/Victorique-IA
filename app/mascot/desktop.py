@@ -16,9 +16,13 @@ lines and, when the chat window is not in front, a short excerpt of a
 finished reply. The open windows are listed a few times a second (front to
 back) and the one she stands on is re-read every tick, so she rides along
 when it is dragged and falls when it closes, is minimized or covered.
+Inside Spotify she also walks on the player bar, the panels and, with the
+Spicetify bridge, on tabs and covers (app/spotify/layout.py), even when it is
+maximized.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import queue
 import random
@@ -26,7 +30,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 from PIL import Image
 
@@ -34,7 +38,7 @@ from app.mascot import sprite
 from app.mascot.balloon import WIDTH as BALLOON_WIDTH, Bubble, Button, plain_text, render_balloon
 from app.mascot.behavior import Brain, wobble
 from app.mascot.bus import mascot_bus
-from app.mascot.surfaces import Area, WindowBox, World, build_world
+from app.mascot.surfaces import Area, Ledge, WindowBox, World, build_world, window_hwnd
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +51,11 @@ DRAG_THRESHOLD = 5
 REPLY_CHARS = 320
 LIFE_TAGS = {
     "tedio": "entediada", "tarde": "hora tardia", "bagunca": "sobre uma pasta",
-    "organizado": "organização concluída", "retorno": "de volta",
+    "organizado": "organização concluída", "retorno": "de volta", "musica": "no Spotify",
 }
 LIFE_EXPRESSIONS = {
     "tedio": "sleepy", "tarde": "concerned", "bagunca": "skeptical",
-    "organizado": "happy", "retorno": "neutral",
+    "organizado": "happy", "retorno": "neutral", "musica": "focused",
 }
 SILENCE_MINUTES = 120
 CLICK_WAIT = 0.3           # fallback when Windows does not say its double-click time
@@ -77,6 +81,7 @@ def double_click_seconds() -> float:
 DEFAULT_PREFS = {
     "mascot_enabled": True, "mascot_size": 136, "mascot_walk": True, "mascot_climb": True,
     "mascot_replies": True, "mascot_hide_fullscreen": True, "life_dnd": False,
+    "spotify_enabled": True,
 }
 
 
@@ -100,6 +105,7 @@ class DesktopMascot:
                  foreground_fn: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
                  windows_fn: Optional[Callable[..., List[WindowBox]]] = None,
                  window_box_fn: Optional[Callable[[int], Optional[WindowBox]]] = None,
+                 ledges_fn: Optional[Callable[[WindowBox, float], Sequence[Ledge]]] = None,
                  clock: Callable[[], float] = time.monotonic,
                  rng: Optional[random.Random] = None,
                  click_wait: Optional[float] = None,
@@ -113,6 +119,8 @@ class DesktopMascot:
             window_box_fn = window_box_fn or win32.window_box
         if foreground_fn is None:
             from app.life.observer import foreground_window as foreground_fn
+        if ledges_fn is None:
+            from app.spotify.layout import ledges_for as ledges_fn
         if prefs_loader is None or prefs_saver is None:
             from app.core import preferences
             prefs_loader = prefs_loader or preferences.load
@@ -131,6 +139,7 @@ class DesktopMascot:
         self.foreground_fn = foreground_fn
         self.windows_fn = windows_fn
         self.window_box_fn = window_box_fn
+        self.ledges_fn = ledges_fn
         self.clock = clock
         self.click_wait = click_wait if click_wait is not None else double_click_seconds()
         self._pending_click: Optional[float] = None
@@ -556,10 +565,14 @@ class DesktopMascot:
         size = max(60, min(320, int(self.prefs.get("mascot_size") or 136)))
         size_px = max(40, round(size * dpi))
         windows: List[WindowBox] = []
+        ledges = None
         if self.prefs.get("mascot_climb", True):
             self._refresh_windows(now)
             windows = self._windows
-        return build_world(tuple(area), size_px, windows), dpi, size_px
+            if self.prefs.get("spotify_enabled", True) and self.ledges_fn:
+                ledges_fn = self.ledges_fn
+                ledges = lambda box: ledges_fn(box, dpi)    # noqa: E731
+        return build_world(tuple(area), size_px, windows, ledges), dpi, size_px
 
     def _refresh_windows(self, now: float) -> None:
         if now >= self._next_windows:
@@ -570,15 +583,17 @@ class DesktopMascot:
                 logger.exception("Mascote: lista de janelas")
                 self._windows = []
             return
-        key = self.brain.on_window()
-        if not key:
+        hwnd = window_hwnd(self.brain.on_window() or "")
+        if hwnd is None:
             return
         # The window under her feet is re-read every tick, so she rides along smoothly.
-        hwnd = int(key[1:])
         try:
             box = self.window_box_fn(hwnd)
         except Exception:
             box = None
+        old = next((w for w in self._windows if w.hwnd == hwnd), None)
+        if box is not None and old is not None and old.app and not box.app:
+            box = dataclasses.replace(box, app=old.app)
         self._windows = [box if w.hwnd == hwnd else w for w in self._windows if w.hwnd != hwnd or box]
 
     def _frame(self, now: float, dt: float) -> None:

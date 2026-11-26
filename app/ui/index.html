@@ -618,9 +618,18 @@
             <input type="checkbox" class="switch" data-pref="mascot_walk">
           </div>
           <div class="toggle-row">
-            <div><strong>Subir nas janelas abertas</strong><small>Ela escala a lateral de uma janela, pula para outras, senta na barra de título e acompanha a janela quando você a arrasta. Janelas maximizadas ficam de fora.</small></div>
+            <div><strong>Subir nas janelas abertas</strong><small>Ela escala a lateral de uma janela, pula para outras, senta na barra de título e acompanha a janela quando você a arrasta. Janelas maximizadas ficam de fora, exceto o Spotify.</small></div>
             <input type="checkbox" class="switch" data-pref="mascot_climb">
           </div>
+          <div class="toggle-row">
+            <div><strong>Andar pelo Spotify</strong><small>No Spotify, mesmo maximizado, ela anda sobre a barra do player e os painéis. Com a ponte do Spicetify, também sobre abas, capas e faixas. Depende da opção acima.</small></div>
+            <input type="checkbox" class="switch" data-pref="spotify_enabled">
+          </div>
+          <div class="status-card" id="spotifyStatus">Verificando o Spotify…</div>
+          <div class="inline-actions">
+            <button class="btn btn-secondary" id="btnSpicetify" type="button">Instalar a ponte do Spicetify</button>
+          </div>
+          <span class="hint">Precisa do Spicetify (spicetify.app). A ponte é uma extensão pequena que conta ao app, só neste computador, onde ficam as abas e capas e qual música toca. O Spotify reinicia ao instalar.</span>
           <div class="field">
             <label for="prefIdle">Ela adormece depois de (minutos sem interação)</label>
             <input type="number" id="prefIdle" data-pref="idle_minutes" min="1" max="120">
@@ -690,6 +699,10 @@
             <div><strong>Comentários avulsos</strong><small>Hora tardia, pasta bagunçada, organização concluída e retorno depois de muito tempo fora.</small></div>
             <input type="checkbox" class="switch" data-pref="life_comments">
           </div>
+          <div class="toggle-row">
+            <div><strong>Comentar as músicas do Spotify</strong><small>Depois de uns 20 segundos de uma faixa nova, ela pode comentar a escolha. Segue os mesmos limites das outras falas.</small></div>
+            <input type="checkbox" class="switch" data-pref="spotify_comments">
+          </div>
           <div class="field-row">
             <div class="field">
               <label for="prefLifeMax">Máximo de falas por hora</label>
@@ -722,6 +735,7 @@
                 <option value="bagunca">Pasta bagunçada</option>
                 <option value="organizado">Organização concluída</option>
                 <option value="retorno">Retorno após ausência</option>
+                <option value="musica">Música no Spotify</option>
               </select>
               <button class="btn btn-secondary" id="btnLifeTest" type="button">Testar</button>
             </div>

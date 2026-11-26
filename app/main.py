@@ -8,8 +8,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,8 @@ from app.tools.registry import tool_registry
 from app.tools import organizer
 from app.life.service import life_service
 from app.mascot.bus import mascot_bus
+from app.spotify.bridge import MAX_BYTES as SPOTIFY_MAX_BYTES, SPOTIFY_ORIGINS, bridge as spotify_bridge
+from app.spotify.watcher import spotify_watcher
 from app.library import activity as library_activity, sections as library_sections
 from app.library import presence as library_presence_mod
 from app.library import editing as library_editing
@@ -82,11 +84,28 @@ def _local_origins() -> set:
     return origins
 
 
+SPOTIFY_BRIDGE_PATH = "/api/spotify/bridge"
+
+
+def _spotify_cors(origin: str, preflight: bool = False) -> Dict[str, str]:
+    """Spotify's page may post to the bridge (and only there); see app/spotify/bridge.py."""
+    headers = {"Access-Control-Allow-Origin": origin, "Vary": "Origin"}
+    if preflight:
+        headers.update({
+            "Access-Control-Allow-Methods": "POST",
+            "Access-Control-Allow-Headers": "content-type",
+            "Access-Control-Allow-Private-Network": "true",
+            "Access-Control-Max-Age": "600",
+        })
+    return headers
+
+
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     """
     Blocks DNS-rebinding (unexpected Host) and cross-site browser requests
-    (unexpected Origin) before any endpoint runs. No external CORS is allowed.
+    (unexpected Origin) before any endpoint runs. No external CORS is allowed,
+    except Spotify's own page on the Spicetify bridge (token-checked there).
     """
     raw_host = request.headers.get("host", "")
     host = raw_host.split(":")[0].strip("[]").lower()
@@ -94,10 +113,15 @@ async def security_middleware(request: Request, call_next):
         return JSONResponse({"detail": "Host não permitido."}, status_code=400)
 
     origin = request.headers.get("origin")
-    if origin and origin not in _local_origins():
+    spotify = bool(origin) and origin in SPOTIFY_ORIGINS and request.url.path == SPOTIFY_BRIDGE_PATH
+    if origin and origin not in _local_origins() and not spotify:
         return JSONResponse({"detail": "Origem não permitida."}, status_code=403)
+    if spotify and request.method == "OPTIONS":
+        return Response(status_code=204, headers=_spotify_cors(origin, preflight=True))
 
     response = await call_next(request)
+    if spotify:
+        response.headers.update(_spotify_cors(origin))
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -1196,6 +1220,54 @@ async def mascot_command(req: MascotCommand):
 async def mascot_open_conversation(req: MascotOpenConversation):
     """From the mini chat: continue this conversation in the main window."""
     return {"opened": mascot_bus.open_conversation(req.conversation_id)}
+
+# ----------------- Spotify (app/spotify) -----------------
+@app.get("/api/spotify/status")
+async def spotify_status():
+    from app.spotify.spicetify import find_cli
+    return {**spotify_bridge.status(), **spotify_watcher.status(), "spicetify": bool(find_cli())}
+
+
+@app.post(SPOTIFY_BRIDGE_PATH)
+async def spotify_bridge_post(request: Request):
+    """Report from the Spicetify extension when it has no WebSocket."""
+    body = await request.body()
+    if len(body) > SPOTIFY_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Relatório grande demais.")
+    if not spotify_bridge.receive_text(body.decode("utf-8", "replace")):
+        raise HTTPException(status_code=403, detail="Relatório recusado.")
+    return {"ok": True}
+
+
+@app.websocket("/api/spotify/ws")
+async def spotify_bridge_ws(ws: WebSocket):
+    """The Spicetify extension's live channel. The HTTP middleware does not run
+    for WebSockets, so Host, Origin and the token are checked here."""
+    host = (ws.headers.get("host") or "").split(":")[0].strip("[]").lower()
+    origin = ws.headers.get("origin")
+    allowed = (not host or host in _local_hosts()) and \
+        (not origin or origin in _local_origins() or origin in SPOTIFY_ORIGINS)
+    if not allowed or not spotify_bridge.check(ws.query_params.get("t")):
+        await ws.close(code=1008)
+        return
+    await ws.accept()
+    try:
+        while True:
+            spotify_bridge.receive_text(await ws.receive_text())
+    except WebSocketDisconnect:
+        pass
+    finally:
+        spotify_bridge.disconnected()
+
+
+@app.post("/api/spotify/spicetify/install")
+async def spotify_install():
+    from app.spotify.spicetify import SpicetifyError, install
+    try:
+        return await asyncio.to_thread(install, settings.port, spotify_bridge.token())
+    except SpicetifyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 # ----------------- Biblioteca (sections = folders, books = files) -----------------
 class LibrarySectionCreate(BaseModel):
