@@ -8,8 +8,8 @@ Gerado por `scripts/sprite_prompts.py` (edite o personagem e o estilo lá e rode
 2. **Paleta.** Rode `.venv\Scripts\python.exe scripts\postprocess_sprites.py paleta`. Ela tira ~36 cores da mestra, e todos os sprites serão forçados a usar só essas cores (é isso que une o estilo).
 3. **Cada imagem abaixo.** Abra um chat novo no ChatGPT (chats longos fazem o desenho derivar), anexe o que o item pede, cole o prompt e escolha formato horizontal 3:2 se o ChatGPT oferecer. Salve em `sprites_novos/gerado/` com o nome indicado. Gere de novo só as imagens que saírem ruins.
 4. **Conferir o andamento.** `scripts\postprocess_sprites.py status` mostra o que falta.
-5. **Pós-processar.** `scripts\postprocess_sprites.py processar` limpa o fundo, alinha a grade de pixels, aplica a paleta, junta as partes e escreve as folhas prontas em `sprites_novos/pronto/` (com prévias em `pronto/_previa/`).
-6. **Montar o atlas do mascote.** `scripts\build_mascot_sprites.py --source sprites_novos\pronto --debug sprites_novos\debug`.
+5. **Pós-processar.** `scripts\postprocess_sprites.py processar` limpa o fundo, alinha a grade de pixels, aplica a paleta, junta as partes e grava as folhas prontas no lugar das antigas, em `app/mascot/assets/source/` (prévias em `sprites_novos/previa/`).
+6. **Montar o atlas do mascote.** `scripts\build_mascot_sprites.py --debug sprites_novos\debug`.
 
 ## Dicas
 

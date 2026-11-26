@@ -6,7 +6,9 @@ build_mascot_sprites.py espera.
     .venv\\Scripts\\python.exe scripts\\postprocess_sprites.py status
     .venv\\Scripts\\python.exe scripts\\postprocess_sprites.py processar [--so 01 12 ...]
 
-Pastas (em sprites_novos/): gerado/ (suas imagens), pronto/ (saída), paleta.json.
+Pastas: sprites_novos/gerado/ (suas imagens), sprites_novos/paleta.json e
+sprites_novos/previa/ (prévias); as folhas prontas substituem as do mascote em
+app/mascot/assets/source/, listadas em novos.json para o montador do atlas.
 Os nomes esperados estão em PROMPTS.md (ou em `status`).
 
 O que `processar` faz com cada folha:
@@ -40,7 +42,8 @@ import sprite_plan as P
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / "sprites_novos"
 GERADO = BASE / "gerado"
-PRONTO = BASE / "pronto"
+PRONTO = B.SOURCE                   # as folhas do mascote (app/mascot/assets/source)
+PREVIA = BASE / "previa"
 PALETA = BASE / "paleta.json"
 
 LOGICAL = 120       # altura dela em pé, em pixels de arte
@@ -306,6 +309,14 @@ def process_sheet(sheet: B.Sheet, palette: np.ndarray, tol: float, erode: int,
     return out
 
 
+def mark_prepared(file: str) -> None:
+    """Lists the sheet in novos.json, so the atlas builder takes it as it is."""
+    manifest = PRONTO / B.MANIFEST
+    names = set(json.loads(manifest.read_text(encoding="utf-8"))) if manifest.exists() else set()
+    names.add(file)
+    manifest.write_text(json.dumps(sorted(names), indent=1) + "\n", encoding="utf-8")
+
+
 def preview(img: Image.Image, path: Path) -> None:
     bg = Image.new("RGBA", img.size, (70, 120, 80, 255))
     bg.alpha_composite(img)
@@ -371,14 +382,14 @@ def cmd_processar(args: argparse.Namespace) -> int:
         if img is None:
             continue
         img.save(PRONTO / sheet.file, "WEBP", lossless=True, method=6)
-        preview(img, PRONTO / "_previa" / (P.stem(sheet) + ".png"))
+        preview(img, PREVIA / (P.stem(sheet) + ".png"))
+        mark_prepared(sheet.file)
         done += 1
     for line in warn:
         print("AVISO", line)
     print(f"\n{done} folhas -> {PRONTO.relative_to(ROOT)}")
     if done:
-        print("Próximo: scripts\\build_mascot_sprites.py --source sprites_novos\\pronto "
-              "--debug sprites_novos\\debug")
+        print("Próximo: scripts\\build_mascot_sprites.py --debug sprites_novos\\debug")
     return 0
 
 

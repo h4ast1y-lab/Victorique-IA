@@ -15,8 +15,12 @@ the floor shadows of the jump and fall sheets, cuts the frames at the
 emptiest columns near the even grid, puts every sheet on the same scale (the
 sheets draw her at different sizes) and finds each frame's anchor.
 
---source DIR reads sheets made by postprocess_sprites.py instead (already cut
-out, on one pixel grid and one scale, so nothing is resampled here).
+Sheets made by postprocess_sprites.py (listed in source/novos.json) are
+already cut out, on one pixel grid and at one scale: they are only cut into
+frames and anchored, never resampled.
+
+--source DIR reads the sheets from another folder; a sheet missing there
+comes from assets/source.
 
 --debug DIR also writes a contact sheet per animation with the anchors marked
 and a line-up of one frame of each animation at the common scale.
@@ -36,19 +40,14 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "app" / "mascot" / "assets" / "source"
-ORIGINAL = SOURCE       # the hand-tuned sheets, the fallback for --source
+ORIGINAL = SOURCE       # assets/source, where a sheet missing from --source comes from
 OUT_IMAGE = ROOT / "app" / "mascot" / "assets" / "victorique.webp"
 OUT_JSON = ROOT / "app" / "mascot" / "assets" / "victorique.json"
 
 STAND_HEIGHT = 240      # standing figure height in the atlas, in px
-PREPARED = False        # sheets already cut out and scaled (--source)
-
-
-def is_prepared(sheet: "Sheet") -> bool:
-    """This sheet comes from the --source folder (a sheet missing there falls
-    back to the original one in assets/source, cut and scaled as before)."""
-    return PREPARED and (SOURCE / sheet.file).exists()
-POOL = 4                # labeling runs on a 4x4 max-pooled mask
+MANIFEST = "novos.json"  # in a source folder: the sheets postprocess_sprites.py made
+PREPARED: set = set()    # file names of those sheets (filled by main)
+POOL = 4              # labeling runs on a 4x4 max-pooled mask
 MIN_PART = 4            # pooled cells; smaller specks are noise
 
 
@@ -110,6 +109,21 @@ SHEETS: List[Sheet] = [
     Sheet("tantrum", "27-birra.webp", 1, 8, "white", white_low=215, facing="right",
           main_only=True),
 ]
+
+
+def sheet_path(sheet: Sheet) -> Path:
+    """Where the sheet is read from: the --source folder, else assets/source."""
+    path = SOURCE / sheet.file
+    return path if path.exists() else ORIGINAL / sheet.file
+
+
+def prepared_in(folder: Path, every: bool = False) -> set:
+    """Sheets of `folder` made by postprocess_sprites.py: those its manifest
+    lists (or, with `every` and no manifest, all of the sheets it has)."""
+    manifest = folder / MANIFEST
+    if manifest.exists():
+        return set(json.loads(manifest.read_text(encoding="utf-8")))
+    return {s.file for s in SHEETS if (folder / s.file).exists()} if every else set()
 
 
 # ----------------- Masks -----------------
@@ -249,13 +263,9 @@ class Frame:
 
 
 def frames_of(sheet: Sheet) -> List[List[Frame]]:
-    if is_prepared(sheet):
+    if sheet.file in PREPARED:
         sheet = replace(sheet, background="alpha", threshold=128, shadow=False)
-        img = Image.open(SOURCE / sheet.file)
-    else:
-        if PREPARED:
-            print(f"  {sheet.file}: not in {SOURCE.name}/, using the original sheet")
-        img = Image.open(ORIGINAL / sheet.file)
+    img = Image.open(sheet_path(sheet))
     mask, rgba = sheet_mask(sheet, img)
     mask = drop_specks(mask)
     h, w = mask.shape
@@ -402,11 +412,11 @@ def build(debug: Optional[Path] = None) -> Dict:
             ref = sheet.ref_height
         else:
             ref = float(np.mean([flat[i].box[3] - flat[i].box[1] for i in sheet.ref]))
-        prepared = is_prepared(sheet)
+        prepared = sheet.file in PREPARED
         scale = 1.0 if prepared else STAND_HEIGHT / ref
         entries = []
         # postprocess_sprites.py already erased the drawn cursor and saved its tips
-        tips_file = SOURCE / (sheet.file.rsplit(".", 1)[0] + ".cursor.json")
+        tips_file = sheet_path(sheet).with_suffix(".cursor.json")
         tips = (json.loads(tips_file.read_text(encoding="utf-8"))
                 if prepared and sheet.anchor_x == "cursor" else None)
         index = 0
@@ -505,9 +515,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--source", type=Path,
                         help="folder with sheets made by postprocess_sprites.py")
     args = parser.parse_args(argv)
+    global SOURCE
     if args.source:
-        global SOURCE, PREPARED
-        SOURCE, PREPARED = args.source.resolve(), True
+        SOURCE = args.source.resolve()
+    PREPARED.update(prepared_in(ORIGINAL))
+    if SOURCE != ORIGINAL:
+        PREPARED.difference_update(s.file for s in SHEETS if (SOURCE / s.file).exists())
+        PREPARED.update(prepared_in(SOURCE, every=True))
     data = build(args.debug)
     total = sum(len(a["frames"]) for a in data["anims"].values())
     print(f"{len(data['anims'])} animações, {total} quadros -> {OUT_IMAGE.relative_to(ROOT)}")
