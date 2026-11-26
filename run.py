@@ -14,7 +14,16 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def configure_console():
-    """Avoid mojibake in cmd/PowerShell consoles when possible."""
+    """Avoid mojibake in cmd/PowerShell consoles when possible.
+
+    Under pythonw.exe there is no console and sys.stdout/sys.stderr are None.
+    uvicorn's log formatter calls sys.stdout.isatty() and the backend thread
+    would die silently, so give those streams somewhere to write.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
