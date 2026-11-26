@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import logging
 import os
 import re
 import shutil
@@ -21,10 +22,13 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
 EXTENSION = "victorique.js"
 TEMPLATE = Path(__file__).with_name(EXTENSION)
 TIMEOUT = 180
 QUICK_TIMEOUT = 20
+LAUNCH_TIMEOUT = 60
 STORE_PACKAGE = "SpotifyAB.SpotifyMusic"
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _config_cache: Dict[str, Path] = {}
@@ -42,6 +46,23 @@ def needs_backup(output: str) -> bool:
     Spicetify itself then says to run «spicetify backup apply»."""
     text = output.lower()
     return "backup apply" in text and ("stock state" in text or "mismatch" in text)
+
+
+def needs_restore(output: str) -> bool:
+    """`apply` refused because the backup was made by an older Spicetify (it
+    updated): it then says «Preprocessed Spotify data is outdated. Please run
+    spicetify restore backup apply»."""
+    text = output.lower()
+    return "restore backup apply" in text and ("outdated" in text or "preprocessed" in text)
+
+
+def recovery(output: str) -> Optional[List[str]]:
+    """The command Spicetify asks for after a failed `apply`, or None."""
+    if needs_restore(output):
+        return ["restore", "backup", "apply"]
+    if needs_backup(output):
+        return ["backup", "apply"]
+    return None
 
 
 def render(port: int, token: str) -> str:
@@ -218,21 +239,24 @@ def install(port: int, token: str, *, apply: bool = True, runner: Runner = subpr
         try:
             _run(runner, [cli, "apply"])
         except SpicetifyError as exc:
-            if not needs_backup(exc.output):
+            fix = recovery(exc.output)
+            if not fix:
                 raise SpicetifyError(f"{exc}{_hint(config)}") from exc
-            # Spotify updated and is back to stock: what Spicetify asks for (and
-            # what «spicetify auto» does). "y" answers its Microsoft Store warning.
+            # Spotify (or Spicetify) updated: run what Spicetify asks for (what
+            # «spicetify auto» does). "y" answers its Microsoft Store warnings.
             try:
-                _run(runner, [cli, "backup", "apply"], answer="y")
+                _run(runner, [cli, *fix], answer="y\ny")
             except SpicetifyError as again:
                 raise SpicetifyError(f"{again}{_hint(config)}") from again
             rebacked = True
-    message = "Ponte instalada. O Spotify reinicia e ela passa a ver abas e capas."
+    message = ("Ponte instalada. O Spotify reinicia e ela passa a ver abas e capas e a atender "
+               "pedidos de música nos chats.")
     if rebacked:
-        message += " O Spotify tinha atualizado, então o Spicetify refez o backup dele antes."
+        message += " O Spotify (ou o Spicetify) tinha atualizado, então o Spicetify refez o backup antes."
     if store_spotify():
         message += (" Seu Spotify é o da Microsoft Store: aberto pelo menu Iniciar, ele vem sem a "
-                    "ponte. Use «Reaplicar» (ou o comando «spicetify auto») para abri-lo com ela.")
+                    "ponte. Use «Reaplicar» (ou o comando «spicetify auto») para abri-lo com ela; "
+                    "pedir uma música no chat também o reabre com a ponte.")
     return {"ok": True, "path": str(target), "message": message, "rebacked": rebacked}
 
 
@@ -257,6 +281,42 @@ def uninstall(*, apply: bool = True, runner: Runner = subprocess.run,
             _run(runner, [cli, "apply"])
         except SpicetifyError as exc:
             # A stock Spotify (it updated) has no bridge to take out anymore.
-            if not needs_backup(exc.output):
+            if not recovery(exc.output):
                 raise SpicetifyError(f"{exc}{_hint(config)}") from exc
     return {"ok": True, "message": "Ponte removida do Spotify."}
+
+
+def launch(*, runner: Runner = subprocess.run, cli: Optional[str] = None) -> bool:
+    """Opens Spotify (or reopens it) with Spicetify's changes, so the bridge
+    comes up: «spicetify restart». False without Spicetify or when it fails."""
+    cli = cli or find_cli()
+    if not cli:
+        return False
+    try:
+        _run(runner, [cli, "restart"], LAUNCH_TIMEOUT)
+    except SpicetifyError as exc:
+        logger.info("spicetify restart falhou: %s", exc)
+        return False
+    return True
+
+
+def store_without_bridge(runner: Runner = subprocess.run) -> bool:
+    """The Microsoft Store Spotify is running as opened from the Start menu,
+    without Spicetify (its main process lacks --app-directory). Spicetify
+    reopening it brings the bridge back. False when unsure."""
+    if os.name != "nt":
+        return False
+    # As JSON: PowerShell may wrap long plain lines, and a wrapped piece of a
+    # helper process's command line would look like a main process.
+    script = ("@(Get-CimInstance Win32_Process -Filter \"Name='Spotify.exe'\" | "
+              "ForEach-Object { $_.CommandLine }) | ConvertTo-Json -Compress")
+    try:
+        output = _run(runner, ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                      QUICK_TIMEOUT)
+        lines = json.loads(output.strip() or "[]")
+    except (SpicetifyError, OSError, ValueError):
+        return False
+    if isinstance(lines, str):
+        lines = [lines]
+    mains = [line for line in lines if isinstance(line, str) and line.strip() and "--type=" not in line]
+    return bool(mains) and not any("--app-directory" in line for line in mains)

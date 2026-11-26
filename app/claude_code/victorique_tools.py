@@ -1,8 +1,10 @@
 """
 Ferramentas MCP em processo: dão ao Claude Code acesso só de leitura às memórias
 e aos documentos indexados da Victorique, respeitando o projeto da conversa, as
-ferramentas de organização (mover, renomear, mandar para a Reserva) e as de
-documentos de escritório (ler e editar Word, Excel, PowerPoint e PDF).
+ferramentas de organização (mover, renomear, mandar para a Reserva), as de
+documentos de escritório (ler e editar Word, Excel, PowerPoint e PDF) e as do
+Spotify (tocar, fila, buscar, controlar e o que está tocando; app/spotify/tools.py),
+que rodam sem pedir aprovação.
 
 As de organização e as de edição ficam FORA de ``allowed_tools``: cada chamada
 passa pelo ``can_use_tool`` e abre a barra de autorização (as de edição são
@@ -16,16 +18,20 @@ from typing import Any, Dict, Optional
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from app.memory.memory_store import memory_store
+from app.spotify import tools as spotify_tools
+from app.spotify.control import SpotifyError
 from app.tools import file_tools, office, organizer
 from app.rag.vector_store import vector_store
 
 logger = logging.getLogger("claude_code.victorique_tools")
 
 SERVER_NAME = "victorique"
+# Run without asking: reads, and the Spotify controls (play, pause, volume...).
 VICTORIQUE_TOOL_NAMES = [
     f"mcp__{SERVER_NAME}__buscar_memorias",
     f"mcp__{SERVER_NAME}__buscar_documentos",
     f"mcp__{SERVER_NAME}__ler_documento",
+    *(f"mcp__{SERVER_NAME}__{name}" for name in spotify_tools.NAMES),
 ]
 # Asked in the authorization bar (auto-approved in turbo: originals go to the Reserva).
 DOCUMENT_TOOL_NAMES = [
@@ -323,8 +329,28 @@ def create_victorique_server(project_id: Optional[str]):
     async def _criar(args):
         return await criar_documento(args)
 
+    spotify = [_spotify_tool(name) for name in spotify_tools.NAMES]
     return create_sdk_mcp_server(
         name=SERVER_NAME, version="1.0.0",
         tools=[_memorias, _documentos, _mover, _renomear, _reserva,
-               _ler, _word, _planilha, _pdf, _criar],
+               _ler, _word, _planilha, _pdf, _criar, *spotify],
     )
+
+
+async def spotify(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """One of the spotify_* tools (app/spotify/tools.py), as an MCP result."""
+    try:
+        result = await spotify_tools.run(name, args or {})
+    except SpotifyError as exc:
+        return _failure(str(exc))
+    except Exception as exc:
+        logger.exception("%s falhou", name)
+        return _failure(f"Erro ao falar com o Spotify: {exc}")
+    return _content(spotify_tools.as_text(result))
+
+
+def _spotify_tool(name: str):
+    @tool(name, spotify_tools.DESCRIPTIONS[name], spotify_tools.SCHEMAS[name])
+    async def _run(args):
+        return await spotify(name, args)
+    return _run

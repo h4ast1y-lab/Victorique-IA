@@ -4,6 +4,7 @@ from typing import Dict, Any, Callable, List, Optional
 
 from app.config import settings
 from app.security.permissions import ActionCategory, security_manager
+from app.spotify import tools as spotify_tools
 from app.tools.file_tools import (
     list_directory, read_file, search_files, write_file, create_directory, delete_file
 )
@@ -155,6 +156,17 @@ class ToolRegistry:
             category=ActionCategory.FREE,
             func=get_system_metrics,
         ))
+        # Spotify (app/spotify/tools.py): play, queue, pause, volume... Free:
+        # controlling the music is harmless.
+        for name in spotify_tools.NAMES:
+            schema = spotify_tools.SCHEMAS[name]
+            self.register(ToolDefinition(
+                name=name,
+                description=spotify_tools.DESCRIPTIONS[name],
+                category=ActionCategory.FREE,
+                func=spotify_tools.FUNCTIONS[name],
+                parameters=_schema(schema["properties"], schema["required"]),
+            ))
 
         # Category 2: Requires explicit user authorization
         self.register(ToolDefinition(
@@ -357,7 +369,7 @@ class ToolRegistry:
 
     @staticmethod
     def _resource_target(params: Dict[str, Any]) -> str:
-        for key in ("path", "query", "expression", "url"):
+        for key in ("path", "query", "expression", "url", "pedido", "acao"):
             if params.get(key) is not None:
                 return str(params.get(key))
         moves = params.get("moves")

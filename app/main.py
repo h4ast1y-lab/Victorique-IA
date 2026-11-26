@@ -1267,8 +1267,10 @@ async def spotify_bridge_post(request: Request):
 
 @app.websocket("/api/spotify/ws")
 async def spotify_bridge_ws(ws: WebSocket):
-    """The Spicetify extension's live channel. The HTTP middleware does not run
-    for WebSockets, so Host, Origin and the token are checked here."""
+    """The Spicetify extension's live channel: its reports come in, and the
+    chats' commands (play, pause...) go out (app/spotify/control.py). The HTTP
+    middleware does not run for WebSockets, so Host, Origin and the token are
+    checked here."""
     host = (ws.headers.get("host") or "").split(":")[0].strip("[]").lower()
     origin = ws.headers.get("origin")
     allowed = (not host or host in _local_hosts()) and \
@@ -1277,13 +1279,14 @@ async def spotify_bridge_ws(ws: WebSocket):
         await ws.close(code=1008)
         return
     await ws.accept()
+    link = spotify_bridge.attach(ws.send_text)
     try:
         while True:
             spotify_bridge.receive_text(await ws.receive_text())
     except WebSocketDisconnect:
         pass
     finally:
-        spotify_bridge.disconnected()
+        spotify_bridge.detach(link)
 
 
 @app.post("/api/spotify/spicetify/install")

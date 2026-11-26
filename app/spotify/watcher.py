@@ -102,6 +102,11 @@ class SpotifyWatcher:
                 logger.exception("Spotify: não consegui avisar a vida própria")
         return offer
 
+    def skip_comment(self, track: Optional[Track]) -> None:
+        """She put this track on herself (asked in a chat): no loose comment on it later."""
+        if track is not None and track.key not in self.tracker.offered:
+            self.tracker.offered.append(track.key)
+
     def _run(self) -> None:
         while not self._stop.wait(self.interval):
             self.poll()

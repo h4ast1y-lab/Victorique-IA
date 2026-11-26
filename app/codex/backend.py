@@ -70,6 +70,9 @@ CODEX_NOTE = (
     "e listar arquivos com comandos para responder, mas não altera nada no computador. Se o "
     "usuário pedir para mover, renomear, apagar ou criar arquivos, diga que neste modo você só "
     "consulta e que o modo local ou o Claude Code fazem isso, com a aprovação dele.\n"
+    "SPOTIFY: neste modo você não controla o Spotify. Se o usuário pedir para tocar, pausar ou "
+    "pular música, diga que no modo Claude Code ou no modo local a Victorique faz isso pelo chat; "
+    "não tente por comandos.\n"
     "Responda sempre em português do Brasil."
 )
 REMINDER = (

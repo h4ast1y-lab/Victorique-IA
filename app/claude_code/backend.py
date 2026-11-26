@@ -71,6 +71,12 @@ TOOLS_NOTE = (
     "Write em arquivos binários. O original sempre vai para a Reserva antes; diga ao usuário "
     "onde ficou a versão nova. Anexos do chat ficam nos dados do app e não são alterados: a "
     "versão editada vai para Documentos\\Victorique.\n"
+    "SPOTIFY: para tocar uma música, um artista, um álbum, uma playlist ou as curtidas, use "
+    "spotify_tocar; para fila, spotify_fila; para pausar, continuar, pular, voltar, volume, "
+    "aleatório, repetir ou curtir, spotify_controlar; para saber o que toca, spotify_tocando; "
+    "para mostrar opções antes de tocar, spotify_buscar. Nunca use Bash, scripts ou o navegador "
+    "para isso. Depois, diga em uma frase curta o que ficou tocando (não invente: use o que a "
+    "ferramenta devolveu); se ela disser que a ponte não está conectada, repasse a dica.\n"
     "Responda sempre em português do Brasil."
 )
 

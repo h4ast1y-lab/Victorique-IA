@@ -953,7 +953,8 @@ Com o Spotify aberto, ela anda por dentro dele e comenta a música que toca.
   Spotify (64 px de navegação no topo, 88 px de player embaixo, medidos no 1.3.10).
 - **Spotify da Microsoft Store:** o Spicetify o suporta só em parte. Aberto pelo menu
   Iniciar, ele vem sem as modificações (sem a ponte). Para abri-lo com a ponte, use
-  «Reaplicar» ou o comando `spicetify auto`. Cada atualização do Spotify pela Store o
+  «Reaplicar» ou o comando `spicetify auto`; pedir uma música no chat também o reabre com
+  a ponte (seção 21). Cada atualização do Spotify pela Store o
   devolve ao original, e então é preciso reaplicar. Sem a ponte, ela continua andando na
   barra do player e lendo a música pelos controles de mídia do Windows.
 - **Comentários:** depois de 20 s ouvindo uma faixa nova (pular não conta), ela pode
@@ -1017,3 +1018,71 @@ lida pelo SMTC numa thread. A ponte foi instalada pelo endpoint, depois de
 (y 946, 88 px), abas, capas e faixas. As bordas calculadas, desenhadas sobre uma captura
 da tela, caíram no topo de cada elemento. Não visto: a mascote andando sobre o Spotify
 na tela.
+
+## 21. Pedir coisas do Spotify pelos chats
+
+No chat principal ou na conversa rápida da mascote, peça em português: «toca Bohemian
+Rhapsody», «põe minha playlist de estudos», «toca as minhas curtidas», «coloca Under
+Pressure na fila», «pausa», «próxima», «volume 30», «liga o aleatório», «repete essa»,
+«curte essa música», «o que está tocando?». Ela busca no próprio Spotify, toca o melhor
+resultado, diz o que ficou tocando e guarda outras opções, caso a escolha não fosse essa.
+
+- **Ferramentas:** `spotify_tocar` (música, artista, álbum, playlist, podcast, episódio ou
+  as Músicas Curtidas; as playlists da sua biblioteca vêm antes da busca; aceita link ou
+  URI do Spotify), `spotify_fila`, `spotify_buscar` (opções sem tocar),
+  `spotify_controlar` (pausar, continuar, próxima, anterior, volume, aleatório, repetir,
+  curtir, descurtir) e `spotify_tocando` (faixa, álbum, posição, volume, aleatório,
+  repetição, se está curtida e as próximas). Controlar música não pede aprovação.
+- **Em que modo:** Claude Code (ferramentas MCP `mcp__victorique__spotify_*`, liberadas
+  sem pergunta) e modo local (llama.cpp/Ollama, pelo registro de ferramentas). O Codex não
+  recebe ferramentas do app: nele ela diz que o Claude Code ou o modo local fazem isso.
+- **Precisa da ponte do Spicetify** (seção 20), que agora também recebe pedidos. Se o
+  Spotify estiver fechado, ou se for o da Microsoft Store aberto pelo menu Iniciar (sem a
+  ponte), um pedido para tocar reabre o Spotify pelo Spicetify (`spicetify restart`) e
+  espera a ponte conectar, até 25 s. Isso só acontece quando a ponte instalada é a deste
+  app (mesma porta e chave). Sem ponte nenhuma, pausar, continuar e pular ainda funcionam
+  pelos controles de mídia do Windows. Um pedido para tocar abre a busca no Spotify para
+  você escolher, e ela diz como ligar a ponte.
+- **Comentários:** a música que ela pôs a seu pedido não vira comentário avulso depois.
+
+Como funciona: o WebSocket da ponte agora vai e volta. `bridge.command()` manda
+`{"cmd", "id", "args"}`; a extensão faz o pedido e responde `{"reply": id, "ok", "result"
+| "error"}`, com o mesmo token dos relatórios. A resposta tem prazo, e o pedido falha
+limpo se o Spotify fechar no meio. Só o WebSocket leva pedidos (o POST de reserva só manda
+relatórios). Dentro do Spotify, a extensão usa as APIs do próprio cliente expostas pelo
+Spicetify (`Spicetify.Platform.PlayerAPI`, `PlaybackAPI`, `LibraryAPI`, `RootlistAPI` e o
+`GraphQLLoader`). Elas existem desde a abertura; o `Spicetify.Player` só fica completo
+depois, e com o Spotify recém-aberto isso pode levar mais de 40 s. A busca usa as
+consultas da página de busca, se ela já foi aberta, ou a da caixa de busca
+(`searchSuggestions`), que existe desde o início. A Web API (`api.spotify.com`) fica de
+reserva, porque costuma responder 429 para o token do cliente. Toda a lógica em Python
+fica em `spotify/control.py` (tipos, links, volume em palavras, mensagens) e
+`spotify/tools.py` (nomes, descrições e esquemas, os mesmos nos dois modos).
+
+O instalador também entende o aviso do Spicetify depois de atualizar o próprio Spicetify
+(«Preprocessed Spotify data is outdated»): roda `spicetify restore backup apply`, como ele
+pede.
+
+Verificação em 26/11/2026, com o Spicetify atualizado para 2.46.7 e o Spotify 1.3.10 da
+Store. Testes automáticos em `tests/test_spotify_control.py` (18 testes):
+- o canal de pedidos: resposta, erro, prazo, fechamento no meio, token, a conexão mais
+  nova vence e chamada de outra thread;
+- tipos, links e volume em palavras;
+- tocar, com e sem ponte, inclusive o Spotify fechado sendo aberto;
+- controles pela ponte e pelo Windows, e o que está tocando;
+- as ferramentas no registro e no servidor MCP;
+- um pedido de ponta a ponta pelo WebSocket do app;
+- `restore backup apply`, a detecção do Spotify da Store sem a ponte e os controles de
+  mídia do Windows.
+
+A extensão rodou no Node contra um Spicetify falso: todos os pedidos, inclusive o caso do
+Spotify recém-aberto. No Spotify real, com uma cópia do app na porta 8777:
+- com o Spotify fechado, `spotify_tocar` («Clair de Lune Debussy») o abriu pelo Spicetify
+  e tocou em 8,5 s;
+- busca de música, artista, playlist e álbum, fila, próxima, anterior, volume, pausar e
+  continuar funcionaram;
+- num turno real do Claude Code, «Toca Bohemian Rhapsody do Queen no Spotify» chamou
+  `spotify_tocar` e a música tocou.
+
+Não testado ao vivo: o modo local (sem modelo instalado aqui) e curtir/descurtir (para
+não mexer na sua biblioteca).

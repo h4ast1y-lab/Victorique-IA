@@ -8,9 +8,15 @@ in data/spotify_bridge.json and written into it at install time. Anything
 else that posts here (another page, another program) is ignored. A report
 older than STALE seconds no longer counts: Spotify closed, minimized or the
 extension stopped.
+
+Over the WebSocket the app can also ask the extension to do things inside
+Spotify (play, pause, search...): command() sends {"cmd", "id", "args"} and
+waits for the extension's {"reply": id, "ok", "result" | "error"}. Only the
+live WebSocket carries commands; the POST fallback is reports only.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -19,7 +25,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from app.spotify.track import Track, clean, make
 
@@ -31,6 +37,16 @@ MAX_ELEMENTS = 48
 KINDS = {"panel", "player", "tab", "card", "row"}
 # Where Spotify's own page lives (the origin of the extension's requests).
 SPOTIFY_ORIGINS = {"https://xpui.app.spotify.com"}
+COMMAND_TIMEOUT = 10.0
+MAX_PENDING = 16
+
+
+class BridgeOffline(RuntimeError):
+    """No live WebSocket from the extension: Spotify closed, unmodded or an old extension."""
+
+
+class BridgeCommandError(RuntimeError):
+    """The extension answered with an error, or did not answer in time."""
 
 
 @dataclass(frozen=True)
@@ -110,6 +126,10 @@ class Bridge:
         self._track: Optional[Track] = None
         self._at = 0.0
         self.reports = 0
+        # The live WebSocket: (link id, send coroutine function, its event loop).
+        self._link: Optional[Tuple[int, Callable[[str], Awaitable[None]], asyncio.AbstractEventLoop]] = None
+        self._links = 0
+        self._pending: Dict[str, "asyncio.Future[Dict[str, Any]]"] = {}
 
     @property
     def path(self) -> Path:
@@ -160,6 +180,8 @@ class Bridge:
             return False
         if not isinstance(data, dict) or not self.check(data.get("token")):
             return False
+        if "reply" in data:
+            return self._reply(data)
         try:
             self.receive(data)
         except ValueError:
@@ -169,6 +191,94 @@ class Bridge:
     def disconnected(self) -> None:
         with self._lock:
             self._at = 0.0
+
+    # --- commands (app -> extension, over the live WebSocket) ---
+    def attach(self, send: Callable[[str], Awaitable[None]],
+               loop: Optional[asyncio.AbstractEventLoop] = None) -> int:
+        """A WebSocket from the extension opened; commands go through `send`
+        (a coroutine function, run on `loop`). The newest one wins."""
+        loop = loop or asyncio.get_running_loop()
+        with self._lock:
+            self._links += 1
+            self._link = (self._links, send, loop)
+            return self._links
+
+    def detach(self, link: int) -> None:
+        """That WebSocket closed: its unanswered commands fail. A newer one stays."""
+        with self._lock:
+            if not self._link or self._link[0] != link:
+                return
+            self._link = None
+            self._at = 0.0
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for future in pending:
+            future.get_loop().call_soon_threadsafe(_fail, future, BridgeOffline("O Spotify fechou a ponte."))
+
+    @property
+    def linked(self) -> bool:
+        """A live WebSocket is open (commands can be sent)."""
+        with self._lock:
+            return self._link is not None
+
+    def _reply(self, data: Dict[str, Any]) -> bool:
+        ident = data.get("reply")
+        with self._lock:
+            future = self._pending.pop(ident, None) if isinstance(ident, str) else None
+        if future is None:
+            return False
+        future.get_loop().call_soon_threadsafe(_resolve, future, data)
+        return True
+
+    async def command(self, name: str, args: Optional[Dict[str, Any]] = None,
+                      timeout: float = COMMAND_TIMEOUT) -> Dict[str, Any]:
+        """Asks the extension to do `name` inside Spotify and returns its result.
+        BridgeOffline without a live WebSocket; BridgeCommandError when the
+        extension fails or does not answer within `timeout` seconds."""
+        with self._lock:
+            link = self._link
+        if link is None:
+            raise BridgeOffline("A ponte do Spicetify não está conectada.")
+        if asyncio.get_running_loop() is link[2]:
+            return await self._command(link, name, args, timeout)
+        # Called from another event loop (a worker thread): the WebSocket lives on its own.
+        future = asyncio.run_coroutine_threadsafe(self._command(link, name, args, timeout), link[2])
+        return await asyncio.wrap_future(future)
+
+    async def _command(self, link, name: str, args: Optional[Dict[str, Any]],
+                       timeout: float) -> Dict[str, Any]:
+        ident = secrets.token_hex(8)
+        future: "asyncio.Future[Dict[str, Any]]" = asyncio.get_running_loop().create_future()
+        with self._lock:
+            if len(self._pending) >= MAX_PENDING:
+                raise BridgeCommandError("O Spotify ainda está ocupado com os pedidos anteriores.")
+            self._pending[ident] = future
+        try:
+            try:
+                await link[1](json.dumps({"cmd": name, "id": ident, "args": args or {}}))
+            except Exception as exc:
+                raise BridgeOffline(f"Não consegui falar com o Spotify ({exc.__class__.__name__}).") from exc
+            try:
+                reply = await asyncio.wait_for(future, timeout)
+            except asyncio.TimeoutError:
+                raise BridgeCommandError("O Spotify não respondeu a tempo.") from None
+        finally:
+            with self._lock:
+                self._pending.pop(ident, None)
+        if not reply.get("ok"):
+            raise BridgeCommandError(clean(reply.get("error"), 300) or "O Spotify recusou o pedido.")
+        result = reply.get("result")
+        return result if isinstance(result, dict) else {}
+
+    async def wait_linked(self, timeout: float, step: float = 0.25) -> bool:
+        """Waits until the extension is connected and reporting (after opening Spotify)."""
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.linked and self.connected:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(step)
 
     def _fresh(self) -> bool:
         return bool(self._at) and self.clock() - self._at <= STALE
@@ -194,12 +304,22 @@ class Bridge:
             for el in elements:
                 kinds[el.kind] = kinds.get(el.kind, 0) + 1
             out: Dict[str, Any] = {"connected": fresh, "elements": len(elements), "kinds": kinds,
-                                   "reports": self.reports}
+                                   "reports": self.reports, "commands": fresh and self._link is not None}
             if detail and fresh and self._view:
                 out["view"] = {"w": self._view.width, "h": self._view.height}
                 out["items"] = [{"id": e.id, "kind": e.kind, "x": e.x, "y": e.y, "w": e.w, "h": e.h}
                                 for e in elements]
             return out
+
+
+def _resolve(future: "asyncio.Future[Dict[str, Any]]", data: Dict[str, Any]) -> None:
+    if not future.done():
+        future.set_result(data)
+
+
+def _fail(future: "asyncio.Future[Dict[str, Any]]", exc: BaseException) -> None:
+    if not future.done():
+        future.set_exception(exc)
 
 
 bridge = Bridge()

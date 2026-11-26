@@ -193,12 +193,13 @@ def test_bridge_rejects_bad_reports_and_cleans_what_it_keeps(tmp_path):
     assert all("/" not in e.id and e.kind == "card" for e in view.elements)
     assert b.track() == Track("Song", "Band", "LP", True, "spicetify")
     assert b.status() == {"connected": True, "elements": MAX_ELEMENTS, "kinds": {"card": MAX_ELEMENTS},
-                          "reports": 1}
+                          "reports": 1, "commands": False}
     detail = b.status(detail=True)
     assert detail["view"] == {"w": 1920, "h": 1032} and len(detail["items"]) == MAX_ELEMENTS
     b.disconnected()
     assert b.track() is None and not b.connected
-    assert b.status(detail=True) == {"connected": False, "elements": 0, "kinds": {}, "reports": 1}
+    assert b.status(detail=True) == {"connected": False, "elements": 0, "kinds": {}, "reports": 1,
+                                     "commands": False}
 
 
 def test_bridge_refuses_a_non_ascii_token_instead_of_crashing(tmp_path):
@@ -356,7 +357,7 @@ def test_install_redoes_the_backup_when_spotify_updated(tmp_path):
     cli = FakeCli(tmp_path / "spicetify" / "config-xpui.ini", errors=[("apply", STOCK)])
     result = spicetify.install(8765, "t", runner=cli, cli="spicetify")
     assert cli.calls[-2:] == [["apply"], ["backup", "apply"]]
-    assert cli.kwargs[-1]["input"] == "y\n"                     # its Microsoft Store warning
+    assert cli.kwargs[-1]["input"] == "y\ny\n"                     # its Microsoft Store warning
     assert result["rebacked"] and "backup" in result["message"]
     assert "stdin" in cli.kwargs[-2] and "input" not in cli.kwargs[-2]   # no prompt ever hangs
 

@@ -2335,7 +2335,7 @@ async function openSettingsModal(section = null) {
 function spotifyStatusText(s) {
   const parts = [];
   if (s.connected) {
-    parts.push(`Ponte do Spicetify conectada (${s.elements} lugares para ela pisar).`);
+    parts.push(`Ponte do Spicetify conectada (${s.elements} lugares para ela pisar${s.commands ? '; atende pedidos de música nos chats' : ''}).`);
   } else if (s.installed && !s.current) {
     parts.push('A ponte instalada é de outra configuração (porta ou chave diferentes): reinstale.');
   } else if (s.installed) {
@@ -2356,7 +2356,7 @@ function spotifyStatusText(s) {
     parts.push('O Spicetify aponta para uma pasta antiga do Spotify; a instalação dirá o que rodar.');
   }
   if (s.store && s.spicetify) {
-    parts.push('Spotify da Microsoft Store: aberto pelo menu Iniciar, ele vem sem a ponte. Use «Reaplicar» (ou o comando «spicetify auto») para abri-lo com ela.');
+    parts.push('Spotify da Microsoft Store: aberto pelo menu Iniciar, ele vem sem a ponte. Use «Reaplicar» (ou o comando «spicetify auto») para abri-lo com ela; pedir uma música no chat também o reabre com a ponte.');
   }
   return parts.join(' ');
 }
