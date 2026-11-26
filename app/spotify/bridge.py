@@ -80,7 +80,7 @@ def parse_view(data: Any) -> Optional[View]:
             continue
         kind = str(item.get("kind") or "")
         ident = clean(item.get("id"), 40).replace("/", "_")
-        if kind not in KINDS or not ident or ident in seen:
+        if kind not in KINDS or not ident or (kind, ident) in seen:
             continue
         try:
             el = Element(ident, kind, _number(item.get("x"), -width, 2 * width),
@@ -88,7 +88,7 @@ def parse_view(data: Any) -> Optional[View]:
                          _number(item.get("w"), 1, 2 * width), _number(item.get("h"), 1, 2 * height))
         except ValueError:
             continue
-        seen.add(ident)
+        seen.add((kind, ident))
         elements.append(el)
     return View(width, height, tuple(elements))
 
@@ -132,7 +132,11 @@ class Bridge:
             return saved
 
     def check(self, token: Any) -> bool:
-        return isinstance(token, str) and bool(token) and hmac.compare_digest(token, self.token())
+        # As bytes: compare_digest raises TypeError on non-ASCII text, and a
+        # stranger's token must be refused, not crash the endpoint.
+        if not isinstance(token, str) or not token:
+            return False
+        return hmac.compare_digest(token.encode("utf-8"), self.token().encode("utf-8"))
 
     def receive(self, data: Any) -> None:
         """A report from the extension (already authenticated). ValueError if malformed."""
@@ -182,10 +186,20 @@ class Bridge:
         with self._lock:
             return self._fresh()
 
-    def status(self) -> Dict[str, Any]:
+    def status(self, detail: bool = False) -> Dict[str, Any]:
         with self._lock:
             fresh = self._fresh()
-            return {"connected": fresh, "elements": len(self._view.elements) if fresh and self._view else 0}
+            elements = self._view.elements if fresh and self._view else ()
+            kinds: Dict[str, int] = {}
+            for el in elements:
+                kinds[el.kind] = kinds.get(el.kind, 0) + 1
+            out: Dict[str, Any] = {"connected": fresh, "elements": len(elements), "kinds": kinds,
+                                   "reports": self.reports}
+            if detail and fresh and self._view:
+                out["view"] = {"w": self._view.width, "h": self._view.height}
+                out["items"] = [{"id": e.id, "kind": e.kind, "x": e.x, "y": e.y, "w": e.w, "h": e.h}
+                                for e in elements]
+            return out
 
 
 bridge = Bridge()

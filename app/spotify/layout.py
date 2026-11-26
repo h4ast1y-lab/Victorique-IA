@@ -16,7 +16,7 @@ from app.mascot.surfaces import Ledge, WindowBox
 from app.spotify.bridge import Bridge, View, bridge as default_bridge
 
 TOP_BAR = 64        # logical px: Spotify's navigation bar
-PLAYER_BAR = 72     # logical px: the player bar
+PLAYER_BAR = 88     # logical px: the player bar (measured on Spotify 1.3.10 through the bridge)
 GAP = 8             # logical px: the gutter around the panels
 ASPECT_SLACK = 0.12
 

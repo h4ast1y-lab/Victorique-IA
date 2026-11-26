@@ -11,7 +11,7 @@ import os
 from typing import Callable, List, Optional, Tuple
 
 from app.spotify.bridge import Bridge, bridge as default_bridge
-from app.spotify.track import Track, from_window_title, make
+from app.spotify.track import IDLE_TITLES, Track, from_window_title, make
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,8 @@ async def _smtc_read(manager) -> Optional[Track]:
         props = await session.try_get_media_properties_async()
         info = session.get_playback_info()
         playing = int(info.playback_status) == PLAYING
+        if str(props.title or "").strip().lower() in IDLE_TITLES:
+            return None             # an ad ("Advertisement", "Spotify")
         return make(props.title, props.artist, props.album_title, playing, "smtc")
     return None
 
@@ -58,14 +60,16 @@ def smtc_track() -> Optional[Track]:
         return None
 
 
-def _spotify_windows() -> List[Tuple[int, str]]:
+def spotify_windows() -> List[Tuple[int, str]]:
+    """(hwnd, title) of Spotify's visible windows; [] when it is closed."""
     if os.name != "nt":
         return []
     from app.mascot import win32
     return win32.app_windows("spotify.exe")
 
 
-def title_track(windows: Callable[[], List[Tuple[int, str]]] = _spotify_windows) -> Optional[Track]:
+def title_track(windows: Optional[Callable[[], List[Tuple[int, str]]]] = None) -> Optional[Track]:
+    windows = windows or spotify_windows
     try:
         found = windows()
     except Exception:

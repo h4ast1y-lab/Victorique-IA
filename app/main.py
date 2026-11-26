@@ -1222,15 +1222,41 @@ async def mascot_open_conversation(req: MascotOpenConversation):
     return {"opened": mascot_bus.open_conversation(req.conversation_id)}
 
 # ----------------- Spotify (app/spotify) -----------------
+def _spotify_snapshot() -> Dict[str, Any]:
+    """Blocking reads for the status card: the Spicetify install, the Spotify
+    window and, when the watcher is not reading (comments off), the track."""
+    from app.spotify import nowplaying, spicetify
+    out = spicetify.state(settings.port, spotify_bridge.token())
+    try:
+        out["open"] = bool(nowplaying.spotify_windows())
+    except Exception:
+        out["open"] = False
+    track = spotify_watcher.track
+    if track is None:
+        try:
+            track = nowplaying.current()
+        except Exception:
+            track = None
+    out["track"] = track.public() if track else None
+    return out
+
+
 @app.get("/api/spotify/status")
-async def spotify_status():
-    from app.spotify.spicetify import find_cli
-    return {**spotify_bridge.status(), **spotify_watcher.status(), "spicetify": bool(find_cli())}
+async def spotify_status(detail: bool = False):
+    """detail=true adds what the bridge reported (positions in the page), to debug the ledges."""
+    snapshot = await asyncio.to_thread(_spotify_snapshot)
+    return {**spotify_bridge.status(detail), **spotify_watcher.status(), **snapshot}
 
 
 @app.post(SPOTIFY_BRIDGE_PATH)
 async def spotify_bridge_post(request: Request):
     """Report from the Spicetify extension when it has no WebSocket."""
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > SPOTIFY_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Relatório grande demais.")
     body = await request.body()
     if len(body) > SPOTIFY_MAX_BYTES:
         raise HTTPException(status_code=413, detail="Relatório grande demais.")
@@ -1267,6 +1293,17 @@ async def spotify_install():
         return await asyncio.to_thread(install, settings.port, spotify_bridge.token())
     except SpicetifyError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/spotify/spicetify/uninstall")
+async def spotify_uninstall():
+    from app.spotify.spicetify import SpicetifyError, uninstall
+    try:
+        result = await asyncio.to_thread(uninstall)
+    except SpicetifyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    spotify_bridge.disconnected()
+    return result
 
 
 # ----------------- Biblioteca (sections = folders, books = files) -----------------

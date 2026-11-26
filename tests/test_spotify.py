@@ -192,9 +192,29 @@ def test_bridge_rejects_bad_reports_and_cleans_what_it_keeps(tmp_path):
     assert len(view.elements) == MAX_ELEMENTS
     assert all("/" not in e.id and e.kind == "card" for e in view.elements)
     assert b.track() == Track("Song", "Band", "LP", True, "spicetify")
-    assert b.status() == {"connected": True, "elements": MAX_ELEMENTS}
+    assert b.status() == {"connected": True, "elements": MAX_ELEMENTS, "kinds": {"card": MAX_ELEMENTS},
+                          "reports": 1}
+    detail = b.status(detail=True)
+    assert detail["view"] == {"w": 1920, "h": 1032} and len(detail["items"]) == MAX_ELEMENTS
     b.disconnected()
     assert b.track() is None and not b.connected
+    assert b.status(detail=True) == {"connected": False, "elements": 0, "kinds": {}, "reports": 1}
+
+
+def test_bridge_refuses_a_non_ascii_token_instead_of_crashing(tmp_path):
+    b = fresh_bridge(tmp_path)
+    b.token()
+    assert b.check("çãéü" * 11) is False                    # compare_digest raises on str here
+    assert not b.receive_text(json.dumps(report("çãéü" * 11)))
+
+
+def test_bridge_keeps_a_tab_and_a_card_that_share_an_id(tmp_path):
+    b = fresh_bridge(tmp_path)
+    same = [{"id": "abc", "kind": "tab", "x": 10, "y": 10, "w": 100, "h": 30},
+            {"id": "abc", "kind": "card", "x": 10, "y": 300, "w": 200, "h": 250},
+            {"id": "abc", "kind": "card", "x": 400, "y": 300, "w": 200, "h": 250}]
+    b.receive(report("x", same))
+    assert [(e.kind, e.id) for e in b.view().elements] == [("tab", "abc"), ("card", "abc")]
 
 
 # ----------------- The track watcher -----------------
@@ -237,6 +257,65 @@ def test_watcher_tells_the_vida_propria_and_respects_the_switches():
     n = len(reads)
     w.poll()
     assert len(reads) == n and w.status()["track"] is None
+    prefs.update(spotify_comments=True, life_comments=False)           # nobody to tell
+    w.poll()
+    assert len(reads) == n
+
+
+def test_walking_off_in_spotify_does_not_silence_her_comments():
+    clock = Ticker(0)
+    said = []
+    w = SpotifyWatcher(prefs_loader=lambda: {"spotify_enabled": False, "spotify_comments": True},
+                       reader=lambda: Track("Song", "Band"), notify=lambda c, f: said.append(c), clock=clock)
+    for _ in range(15):
+        w.poll()
+        clock.t += 2
+    assert said == ["musica"]
+
+
+class _Async:
+    def __init__(self, value):
+        self.value = value
+
+    def __await__(self):
+        if False:
+            yield
+        return self.value
+
+
+class _Session:
+    def __init__(self, app, title, artist="", album="", status=4):
+        self.source_app_user_model_id = app
+        self._props = type("P", (), {"title": title, "artist": artist, "album_title": album})()
+        self._info = type("I", (), {"playback_status": status})()
+
+    def try_get_media_properties_async(self):
+        return _Async(self._props)
+
+    def get_playback_info(self):
+        return self._info
+
+
+class _Manager:
+    def __init__(self, sessions):
+        self.sessions = sessions
+
+    def request_async(self):
+        return _Async(type("M", (), {"get_sessions": lambda _self: self.sessions})())
+
+
+def test_windows_media_controls_read_only_spotify_and_skip_ads():
+    import asyncio
+    store_app = "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"
+    other = _Session("Brave", "Um vídeo", "Canal")
+    playing = _Manager([other, _Session(store_app, "Sob o Luar", "Novatroop", "Sob o Luar", 4)])
+    t = asyncio.run(nowplaying._smtc_read(playing))
+    assert (t.title, t.artist, t.album, t.playing, t.source) == ("Sob o Luar", "Novatroop", "Sob o Luar", True, "smtc")
+    paused = _Manager([_Session("Spotify.exe", "Song", "Band", status=5)])
+    assert asyncio.run(nowplaying._smtc_read(paused)).playing is False
+    for ad in ("Advertisement", "Spotify"):
+        assert asyncio.run(nowplaying._smtc_read(_Manager([_Session(store_app, ad)]))) is None
+    assert asyncio.run(nowplaying._smtc_read(_Manager([other]))) is None
 
 
 def test_now_playing_prefers_the_bridge_then_the_other_readers(tmp_path):
@@ -250,16 +329,94 @@ def test_now_playing_prefers_the_bridge_then_the_other_readers(tmp_path):
 
 # ----------------- Spicetify installer -----------------
 class FakeCli:
-    def __init__(self, config, fail=None):
+    def __init__(self, config, fail=None, errors=None):
         self.config = config
         self.fail = fail
+        self.errors = list(errors or [])     # (command, stdout) answered once each, with exit 1
         self.calls = []
+        self.kwargs = []
 
     def __call__(self, args, **kw):
         self.calls.append(args[1:])
+        self.kwargs.append(kw)
+        if self.errors and args[1:2] == [self.errors[0][0]]:
+            _cmd, out = self.errors.pop(0)
+            return subprocess.CompletedProcess(args, 1, out, "")
         code = 1 if self.fail and args[1:2] == [self.fail] else 0
         out = f"{self.config}\n" if args[1:] == ["-c"] else "ok\n"
         return subprocess.CompletedProcess(args, code, out, "error: backup needed\n" if code else "")
+
+
+STOCK = ("\x1b[33mwarning\x1b[0m Spotify version and backup version are mismatched.\r\n"
+         "\x1b[36minfo\x1b[0m Spotify client is in stock state\r\n"
+         "\x1b[36minfo\x1b[0m Please run \"spicetify backup apply\"\r\n")
+
+
+def test_install_redoes_the_backup_when_spotify_updated(tmp_path):
+    cli = FakeCli(tmp_path / "spicetify" / "config-xpui.ini", errors=[("apply", STOCK)])
+    result = spicetify.install(8765, "t", runner=cli, cli="spicetify")
+    assert cli.calls[-2:] == [["apply"], ["backup", "apply"]]
+    assert cli.kwargs[-1]["input"] == "y\n"                     # its Microsoft Store warning
+    assert result["rebacked"] and "backup" in result["message"]
+    assert "stdin" in cli.kwargs[-2] and "input" not in cli.kwargs[-2]   # no prompt ever hangs
+
+
+def test_install_does_not_touch_the_backup_for_other_errors_and_strips_colours(tmp_path):
+    cli = FakeCli(tmp_path / "config-xpui.ini", errors=[("apply", "\x1b[31merror\x1b[0m Cannot find Spotify\r\n")])
+    with pytest.raises(spicetify.SpicetifyError) as caught:
+        spicetify.install(8765, "t", runner=cli, cli="spicetify")
+    assert ["backup", "apply"] not in cli.calls
+    assert "\x1b" not in str(caught.value) and "Cannot find Spotify" in str(caught.value)
+
+
+def test_cli_runs_without_a_console_window_and_in_utf8(tmp_path, monkeypatch):
+    monkeypatch.setattr(spicetify.os, "name", "nt")
+    monkeypatch.setattr(spicetify.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    cli = FakeCli(tmp_path / "config-xpui.ini")
+    spicetify.install(8765, "t", runner=cli, cli="spicetify")
+    for kw in cli.kwargs:
+        assert kw["creationflags"] == 0x08000000 and kw["encoding"] == "utf-8" and kw["errors"] == "replace"
+
+
+def test_install_does_not_list_the_extension_twice(tmp_path):
+    config = tmp_path / "config-xpui.ini"
+    config.write_text("[Setting]\nspotify_path = C:\\x\n\n[AdditionalOptions]\n"
+                      "extensions = other.js|victorique.js\n", encoding="utf-8")
+    cli = FakeCli(config)
+    spicetify.install(8765, "t", runner=cli, cli="spicetify")
+    assert cli.calls == [["-c"], ["apply"]]
+
+
+def test_uninstall_takes_the_bridge_out(tmp_path):
+    config = tmp_path / "config-xpui.ini"
+    config.write_text("[AdditionalOptions]\nextensions = victorique.js\n", encoding="utf-8")
+    (tmp_path / "Extensions").mkdir()
+    (tmp_path / "Extensions" / "victorique.js").write_text("x", encoding="utf-8")
+    cli = FakeCli(config)
+    assert spicetify.uninstall(runner=cli, cli="spicetify")["ok"]
+    assert cli.calls == [["-c"], ["config", "extensions", "victorique.js-"], ["apply"]]
+    assert not (tmp_path / "Extensions" / "victorique.js").exists()
+    # Spotify already back to stock (it updated): nothing left to take out, not an error.
+    cli = FakeCli(config, errors=[("apply", STOCK)])
+    assert spicetify.uninstall(runner=cli, cli="spicetify")["ok"]
+
+
+def test_state_says_installed_current_store_and_stale(tmp_path, monkeypatch):
+    monkeypatch.setattr(spicetify, "store_spotify", lambda: False)
+    config = tmp_path / "config-xpui.ini"
+    gone = tmp_path / "WindowsApps" / "SpotifyAB.SpotifyMusic_1.303.264.0_x64__zpdnekdrzrea0"
+    config.write_text(f"[Setting]\nspotify_path = {gone}\n\n[AdditionalOptions]\nextensions = victorique.js\n",
+                      encoding="utf-8")
+    cli = FakeCli(config)
+    s = spicetify.state(8765, "tok", cli="spicetify", runner=cli)
+    assert s == {"spicetify": True, "installed": False, "current": False, "store": True, "stale_path": True}
+    (tmp_path / "Extensions").mkdir()
+    (tmp_path / "Extensions" / "victorique.js").write_text(spicetify.render(8765, "tok"), encoding="utf-8")
+    s = spicetify.state(8765, "tok", cli="spicetify", runner=cli)
+    assert s["installed"] and s["current"]
+    assert not spicetify.state(8777, "tok", cli="spicetify", runner=cli)["current"]   # other port
+    monkeypatch.setattr(spicetify, "find_cli", lambda: None)
+    assert spicetify.state(8765, "tok", runner=cli)["spicetify"] is False
 
 
 def test_install_writes_the_extension_next_to_the_config_and_applies(tmp_path):
@@ -329,9 +486,67 @@ def test_bridge_websocket_needs_the_token(client):
             ws.receive_text()
 
 
-def test_status_and_preferences(client):
+def test_bridge_endpoint_refuses_a_bad_token_and_a_huge_body_without_crashing(client):
+    r = client.post("/api/spotify/bridge", content=json.dumps(report("çãéü" * 11)),
+                    headers={"Origin": SPOTIFY_ORIGIN})
+    assert r.status_code == 403
+    r = client.post("/api/spotify/bridge", content="x" * 70_000, headers={"Origin": SPOTIFY_ORIGIN})
+    assert r.status_code == 413
+
+
+def _no_real_spotify(monkeypatch):
+    """The status reads Spicetify, the Spotify window and Windows' media
+    controls: none of the real ones in tests."""
+    monkeypatch.setattr(spicetify, "find_cli", lambda: None)
+    monkeypatch.setattr(spicetify, "store_spotify", lambda: False)
+    monkeypatch.setattr(nowplaying, "spotify_windows", lambda: [])
+    monkeypatch.setattr(nowplaying, "current", lambda *a, **k: None)
+
+
+def test_status_and_preferences(client, monkeypatch):
+    _no_real_spotify(monkeypatch)
     s = client.get("/api/spotify/status").json()
-    assert {"connected", "elements", "track", "running", "spicetify"} <= set(s)
+    assert {"connected", "elements", "track", "running", "spicetify", "installed", "current",
+            "store", "stale_path", "open"} <= set(s)
+    assert s["spicetify"] is False and s["open"] is False and s["track"] is None
     prefs = client.get("/api/preferences").json()
     prefs = prefs.get("preferences", prefs)
     assert prefs["spotify_enabled"] is True and prefs["spotify_comments"] is True
+
+
+def test_status_reads_the_track_itself_when_the_watcher_is_not(client, monkeypatch):
+    _no_real_spotify(monkeypatch)
+    monkeypatch.setattr(nowplaying, "current", lambda *a, **k: Track("Sob o Luar", "Novatroop", source="smtc"))
+    s = client.get("/api/spotify/status").json()
+    assert s["track"]["title"] == "Sob o Luar" and s["track"]["source"] == "smtc"
+
+
+def test_uninstall_endpoint_reports_a_missing_spicetify(client, monkeypatch):
+    _no_real_spotify(monkeypatch)
+    r = client.post("/api/spotify/spicetify/uninstall")
+    assert r.status_code == 400 and "Spicetify" in r.json()["detail"]
+
+
+# ----------------- The lines bank of an older install -----------------
+def test_an_older_bank_gets_the_new_section_once_keeping_its_line_endings(tmp_path):
+    old = "# Falas\r\n\r\n## tarde\r\n- {hora}, minha.\r\n\r\n## tedio\r\n- A :: B :: C\r\n"
+    path = tmp_path / "falas.md"
+    path.write_bytes(old.encode("utf-8"))
+    lines.ensure_bank(path)
+    data = path.read_bytes()
+    assert data.startswith(old.encode("utf-8"))                  # the user's lines untouched
+    text = data.decode("utf-8")
+    assert "## musica" in text and "## bagunca" in text and "\n" not in text.replace("\r\n", "")
+    bank = lines.parse_bank(text)
+    assert bank["tarde"] == ["{hora}, minha."] and bank["musica"] == lines.parse_bank(
+        lines.FACTORY_FILE.read_text(encoding="utf-8"))["musica"]
+    lines.ensure_bank(path)
+    assert path.read_bytes() == data                             # only once
+
+
+def test_lines_with_every_marker_filled_are_preferred():
+    bank = {"musica": ["{musica}, de {artista}.", "Então é {musica} agora."]}
+    for _ in range(20):
+        assert lines.pick("musica", {"musica": "Podcast X"}, [], bank)["fala"] == "Então é Podcast X agora."
+    bank = {"retorno": ["Ah, {nome}, voltou depois de {minutos}."]}
+    assert lines.pick("retorno", {"minutos": "uma hora"}, [], bank)["fala"] == "Ah, voltou depois de uma hora."

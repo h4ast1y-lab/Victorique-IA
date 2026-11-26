@@ -628,8 +628,9 @@
           <div class="status-card" id="spotifyStatus">Verificando o Spotify…</div>
           <div class="inline-actions">
             <button class="btn btn-secondary" id="btnSpicetify" type="button">Instalar a ponte do Spicetify</button>
+            <button class="btn btn-secondary" id="btnSpicetifyRemove" type="button" hidden>Remover a ponte</button>
           </div>
-          <span class="hint">Precisa do Spicetify (spicetify.app). A ponte é uma extensão pequena que conta ao app, só neste computador, onde ficam as abas e capas e qual música toca. O Spotify reinicia ao instalar.</span>
+          <p class="hint">Precisa do Spicetify (spicetify.app). A ponte é uma extensão pequena que conta ao app, só neste computador, onde ficam as abas e capas e qual música toca. O Spotify reinicia ao instalar ou remover. Sem a ponte, ela anda na barra do player e lê a música pelos controles de mídia do Windows ou pelo título da janela.</p>
           <div class="field">
             <label for="prefIdle">Ela adormece depois de (minutos sem interação)</label>
             <input type="number" id="prefIdle" data-pref="idle_minutes" min="1" max="120">
@@ -700,7 +701,7 @@
             <input type="checkbox" class="switch" data-pref="life_comments">
           </div>
           <div class="toggle-row">
-            <div><strong>Comentar as músicas do Spotify</strong><small>Depois de uns 20 segundos de uma faixa nova, ela pode comentar a escolha. Segue os mesmos limites das outras falas.</small></div>
+            <div><strong>Comentar as músicas do Spotify</strong><small>Depois de uns 20 segundos de uma faixa nova, ela pode comentar a escolha. Depende de «Comentários avulsos» e segue os mesmos limites das outras falas, com ou sem a opção de andar pelo Spotify.</small></div>
             <input type="checkbox" class="switch" data-pref="spotify_comments">
           </div>
           <div class="field-row">

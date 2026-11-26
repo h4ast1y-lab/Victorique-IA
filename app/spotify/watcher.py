@@ -82,7 +82,10 @@ class SpotifyWatcher:
             prefs = self.prefs_loader() or {}
         except Exception:
             prefs = {}
-        if not (prefs.get("spotify_enabled", True) and prefs.get("spotify_comments", True)):
+        # Only her comments depend on this; "Andar pelo Spotify" (spotify_enabled)
+        # is about walking and must not silence them. With the vida própria's
+        # loose comments off there is nobody to tell, so Spotify is not read.
+        if not (prefs.get("spotify_comments", True) and prefs.get("life_comments", True)):
             self.track = None
             self.tracker.last = None
             return None

@@ -2,8 +2,9 @@
 Bank of spontaneous lines (``data/falas.md``), editable by the user.
 
 The factory copy ships as ``falas_padrao.md``; it is copied to the data folder
-the first time and never overwritten afterwards. The file is re-read on every
-use, so edits apply without restarting.
+the first time and never overwritten afterwards. A section added to the app
+later (e.g. "musica") is appended once to an older copy, so it can be edited
+too. The file is re-read on every use, so edits apply without restarting.
 """
 import random
 import re
@@ -27,7 +28,46 @@ def ensure_bank(path: Optional[Path] = None) -> Path:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(FACTORY_FILE, path)
+    else:
+        _add_missing_sections(path)
     return path
+
+
+def _headers(text: str) -> set:
+    return {ln.strip()[3:].strip().lower() for ln in text.splitlines() if ln.strip().startswith("## ")}
+
+
+def factory_sections() -> Dict[str, str]:
+    """The raw text of each section of the factory file, header included."""
+    out: Dict[str, List[str]] = {}
+    current = None
+    for raw in FACTORY_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            current = line[3:].strip().lower()
+            out[current] = []
+        if current:
+            out[current].append(raw.rstrip())
+    return {name: "\n".join(rows).strip() + "\n" for name, rows in out.items()}
+
+
+def _add_missing_sections(path: Path) -> None:
+    """Appends the factory sections whose header the user's copy lacks."""
+    try:
+        text = path.read_text(encoding="utf-8")
+        missing = [name for name in CATEGORIES if name not in _headers(text)]
+        if not missing:
+            return
+        factory = factory_sections()
+        blocks = [factory[name] for name in missing if name in factory]
+        if not blocks:
+            return
+        sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+        eol = "\r\n" if b"\r\n" in path.read_bytes() else "\n"    # keep the file's line endings
+        with path.open("a", encoding="utf-8", newline="") as handle:
+            handle.write((sep + "\n".join(blocks)).replace("\n", eol))
+    except OSError:
+        pass  # read-only or locked: the factory lines still apply (load_bank)
 
 
 def parse_bank(text: str) -> Dict[str, List[str]]:
@@ -72,6 +112,14 @@ def fill(template: str, facts: Dict[str, Any]) -> str:
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
+def complete(template: str, facts: Dict[str, Any]) -> bool:
+    """True when every marker but {nome} has a value in `facts`."""
+    for name in _PLACEHOLDER.findall(template):
+        if name != "nome" and facts.get(name) in (None, "", [], ()):
+            return False
+    return True
+
+
 def split_boredom(entry: str) -> Dict[str, str]:
     """"Título :: fala :: pergunta" (the question is optional)."""
     parts = [p.strip() for p in entry.split("::")]
@@ -96,6 +144,9 @@ def pick(
     entries = list(bank.get(category) or [])
     if not entries:
         return {"fala": ""}
+    # Lines whose markers all have a value read best ("de {artista}" with no
+    # artist would leave "de ."); {nome} is optional by design.
+    entries = [e for e in entries if complete(e, facts)] or entries
     seen = {normalize(t) for t in recent}
 
     def rendered(entry: str) -> Dict[str, Any]:

@@ -2332,40 +2332,79 @@ async function openSettingsModal(section = null) {
 }
 
 // ----------------- Spotify (app/spotify) -----------------
+function spotifyStatusText(s) {
+  const parts = [];
+  if (s.connected) {
+    parts.push(`Ponte do Spicetify conectada (${s.elements} lugares para ela pisar).`);
+  } else if (s.installed && !s.current) {
+    parts.push('A ponte instalada é de outra configuração (porta ou chave diferentes): reinstale.');
+  } else if (s.installed) {
+    parts.push(s.open
+      ? 'Ponte instalada, mas sem contato: o Spicetify pode ter saído com uma atualização do Spotify. Reaplique.'
+      : 'Ponte instalada. Ela conecta quando o Spotify abrir.');
+  } else {
+    parts.push('Sem a ponte: ela anda na barra do player do Spotify.');
+  }
+  if (s.track) {
+    parts.push(`${s.track.playing ? 'Tocando' : 'Pausada'}: ${s.track.title}${s.track.artist ? ' · ' + s.track.artist : ''}.`);
+  } else if (!s.open) {
+    parts.push('O Spotify está fechado.');
+  }
+  if (!s.spicetify) {
+    parts.push('Spicetify não encontrado neste computador.');
+  } else if (s.stale_path) {
+    parts.push('O Spicetify aponta para uma pasta antiga do Spotify; a instalação dirá o que rodar.');
+  }
+  if (s.store && s.spicetify) {
+    parts.push('Spotify da Microsoft Store: aberto pelo menu Iniciar, ele vem sem a ponte. Use «Reaplicar» (ou o comando «spicetify auto») para abri-lo com ela.');
+  }
+  return parts.join(' ');
+}
+
 async function loadSpotifyStatus() {
   const card = $('spotifyStatus');
   if (!card) return;
   try {
     const s = await api('/api/spotify/status');
-    const parts = [];
-    parts.push(s.connected
-      ? `Ponte do Spicetify conectada (${s.elements} lugares para ela pisar).`
-      : 'Sem a ponte: ela usa o formato padrão do Spotify (barra do player e painéis).');
-    if (s.track) {
-      parts.push(`${s.track.playing ? 'Tocando' : 'Pausada'}: ${s.track.title}${s.track.artist ? ' · ' + s.track.artist : ''}.`);
-    }
-    if (!s.spicetify) parts.push('Spicetify não encontrado neste computador.');
-    card.textContent = parts.join(' ');
+    card.textContent = spotifyStatusText(s);
+    $('btnSpicetify').textContent = s.installed ? 'Reaplicar a ponte do Spicetify' : 'Instalar a ponte do Spicetify';
+    $('btnSpicetify').disabled = !s.spicetify;
+    $('btnSpicetifyRemove').hidden = !s.installed;
   } catch (err) {
     card.textContent = 'Não consegui consultar o Spotify.';
   }
 }
 
-async function installSpicetify() {
-  if (!confirm('Instalar a ponte da Victorique no Spotify pelo Spicetify? O Spotify vai reiniciar.')) return;
-  const button = $('btnSpicetify');
-  button.disabled = true;
-  button.textContent = 'Instalando…';
+async function runSpicetify(button, path, busyText, question) {
+  if (!confirm(question)) return;
+  const label = button.textContent;
+  $('btnSpicetify').disabled = true;
+  $('btnSpicetifyRemove').disabled = true;
+  button.textContent = busyText;
   try {
-    const result = await api('/api/spotify/spicetify/install', { method: 'POST' });
-    toast(result.message || 'Ponte instalada.');
-    setTimeout(loadSpotifyStatus, 8000);
+    const result = await api(path, { method: 'POST' });
+    toast(result.message || 'Pronto.');
   } catch (err) {
-    toast(`Não consegui instalar: ${err.message}`, 'error');
+    toast(`Spicetify: ${err.message}`, 'error');
   } finally {
-    button.disabled = false;
-    button.textContent = 'Instalar a ponte do Spicetify';
+    button.textContent = label;
+    $('btnSpicetify').disabled = false;
+    $('btnSpicetifyRemove').disabled = false;
+    loadSpotifyStatus();
+    setTimeout(loadSpotifyStatus, 8000);
   }
+}
+
+function installSpicetify() {
+  return runSpicetify($('btnSpicetify'), '/api/spotify/spicetify/install', 'Aplicando…',
+    'Instalar (ou reaplicar) a ponte da Victorique no Spotify pelo Spicetify? O Spotify vai reiniciar. ' +
+    'Se ele tiver atualizado, o Spicetify refaz o backup dele antes (spicetify backup apply), ' +
+    'o que também reativa os temas e extensões que você usa no Spicetify.');
+}
+
+function removeSpicetify() {
+  return runSpicetify($('btnSpicetifyRemove'), '/api/spotify/spicetify/uninstall', 'Removendo…',
+    'Remover a ponte da Victorique do Spotify? O Spotify vai reiniciar.');
 }
 
 // ----------------- Backup -----------------
@@ -2850,6 +2889,7 @@ function initLife() {
   $('btnLifeAccept').addEventListener('click', acceptLifeCase);
   $('btnLifeTest').addEventListener('click', testLife);
   $('btnSpicetify').addEventListener('click', installSpicetify);
+  $('btnSpicetifyRemove').addEventListener('click', removeSpicetify);
   $('btnLifeDnd').addEventListener('click', () => {
     const on = !prefs.life_dnd;
     savePref('life_dnd', on, { immediate: true });

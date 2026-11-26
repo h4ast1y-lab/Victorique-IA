@@ -945,22 +945,37 @@ Com o Spotify aberto, ela anda por dentro dele e comenta a música que toca.
   rola. Instale em Configurações → Na área de trabalho → «Instalar a ponte do
   Spicetify» (o Spotify reinicia) ou com
   `.venv\Scripts\python.exe scripts\install_spicetify.py`. Precisa do
-  [Spicetify](https://spicetify.app); na primeira vez, rode `spicetify backup apply`. Sem a
+  [Spicetify](https://spicetify.app). Se o Spotify atualizou e o Spicetify responde que
+  o cliente voltou ao original («stock state»), o botão roda `spicetify backup apply`
+  sozinho, como o próprio Spicetify pede (e como faz o `spicetify auto`). Depois de
+  instalada, o mesmo botão vira «Reaplicar», e «Remover a ponte» a tira do Spotify. Sem a
   ponte, ou se ela parar de responder por 6 s, valem as bordas pelo formato padrão do
-  Spotify (64 px de navegação no topo, 72 px de player embaixo).
+  Spotify (64 px de navegação no topo, 88 px de player embaixo, medidos no 1.3.10).
+- **Spotify da Microsoft Store:** o Spicetify o suporta só em parte. Aberto pelo menu
+  Iniciar, ele vem sem as modificações (sem a ponte). Para abri-lo com a ponte, use
+  «Reaplicar» ou o comando `spicetify auto`. Cada atualização do Spotify pela Store o
+  devolve ao original, e então é preciso reaplicar. Sem a ponte, ela continua andando na
+  barra do player e lendo a música pelos controles de mídia do Windows.
 - **Comentários:** depois de 20 s ouvindo uma faixa nova (pular não conta), ela pode
   comentar a escolha no balão. Passa pelos mesmos portões e limites da vida própria
   (seção 13): silêncio, não perturbar, intervalo mínimo, limite por hora e apps calados.
   A mesma faixa não é comentada de novo na mesma sessão. O modelo só recebe título,
   artista e álbum e não pode citar letra. O banco de falas ganhou a seção `## musica`
-  (marcadores `{musica}`, `{artista}`, `{album}`).
-- **De onde vem a música:** a ponte; os controles de mídia do Windows (SMTC, se os pacotes
-  `winrt` opcionais do `requirements.txt` estiverem instalados); ou o título da janela do
+  (marcadores `{musica}`, `{artista}`, `{album}`). Um `data/falas.md` criado antes dessa
+  seção a recebe uma vez, no fim do arquivo, para você editar. Quando falta um marcador
+  (um podcast sem artista, por exemplo), ela prefere as falas que não dependem dele.
+- **De onde vem a música:** a ponte; os controles de mídia do Windows (SMTC, com os pacotes
+  `winrt` opcionais do `requirements.txt`; funciona também com o Spotify escondido na
+  bandeja, sabe se está pausado e o álbum, e ignora anúncios); ou o título da janela do
   Spotify («Artista - Música»; pausado, ele vira «Spotify Premium»).
 - **Configurações:** «Andar pelo Spotify» (Na área de trabalho; depende de «Subir nas
-  janelas abertas») e «Comentar as músicas do Spotify» (Vida própria). O cartão de estado
-  mostra se a ponte está conectada e o que toca. «Testar uma fala agora» tem a opção
-  «Música no Spotify».
+  janelas abertas») e «Comentar as músicas do Spotify» (Vida própria; depende de
+  «Comentários avulsos», mas não de andar pelo Spotify). O cartão de estado diz se a ponte
+  está conectada, instalada mas sem contato, ou instalada com outra porta ou chave (aí é
+  só reinstalar), se o Spotify está aberto, o que toca, se o Spicetify aponta para uma
+  pasta antiga do Spotify e se o Spotify é o da Store. «Testar uma fala agora» tem a opção
+  «Música no Spotify». `GET /api/spotify/status?detail=true` mostra os retângulos que a
+  ponte mandou, para depurar as bordas.
 
 Como funciona: `win32.top_windows` marca as janelas do `Spotify.exe`. Para elas,
 `spotify/layout.py` devolve bordas (`surfaces.Ledge`), que `surfaces.window_ledges`
@@ -977,11 +992,28 @@ padrão. Segurança: a ponte só é aceita com o token aleatório de
 64 KB e 48 elementos. `spotify/watcher.py` lê a faixa a cada 2 s e entrega o momento
 `musica` à vida própria.
 
-Verificação em 26/11/2026: `tests/test_spotify.py` (19 testes: título da janela, bordas
+Como a ponte acha as coisas: o Spotify 1.3.x trocou as classes `.Root__*` por nomes
+embaralhados que mudam a cada versão. A ponte procura a grade CSS da janela pelos nomes
+das áreas (`global-nav`, `left-sidebar`, `main-view`, `right-sidebar`,
+`now-playing-bar`), que não mudam, e os itens pelos identificadores dos componentes
+(`data-encore-id` `card`, `chip` e `listRow`, `data-testid="tracklist-row"` e
+`role="tab"`). As classes antigas continuam como reserva para versões velhas. Capas de um
+carrossel que passam da borda do painel são cortadas nela (as escondidas somem), para ela
+não pisar em capas invisíveis. Quando o app está fechado, a ponte espera cada vez mais
+entre as tentativas (até 1 min). O instalador roda o Spicetify sem abrir janela de console,
+lê a saída em UTF-8 sem os códigos de cor e nunca fica preso numa pergunta dele.
+
+Verificação em 26/11/2026: `tests/test_spotify.py` (34 testes: título da janela, bordas
 no Spotify maximizado e flutuante, janela na frente, conversão das posições da ponte
 com DPI de 120 %, pouso numa capa e carona na rolagem, a mascote no player bar e as
-preferências, token e relatórios ruins, a faixa contada só depois de 20 s e uma vez,
-ordem das fontes, instalador com um Spicetify falso, falas do banco, endpoints HTTP e
-WebSocket com origem e token). Não testado aqui: Windows, Spotify e Spicetify reais.
-Os seletores da página do Spotify (`.Root__*`, `.main-card-card`, `[role="tab"]`) podem
-mudar com atualizações dele. Nesse caso, as bordas padrão continuam valendo.
+preferências, token e relatórios ruins (inclusive token com acentos e corpo grande demais),
+a faixa contada só depois de 20 s e uma vez, comentários sem depender de andar pelo
+Spotify, SMTC com anúncios, ordem das fontes, instalador com um Spicetify falso (backup
+refeito, cores, sem console, remoção, estado), falas do banco e seção nova num banco antigo,
+endpoints HTTP e WebSocket com origem e token). No Windows real, com o Spotify 1.3.10 da
+Microsoft Store e o Spicetify 2.45.3: a janela foi reconhecida (maximizada) e a música foi
+lida pelo SMTC numa thread. A ponte foi instalada pelo endpoint, depois de
+`spicetify backup apply`, e conectou por WebSocket. Ela mandou painéis, a barra do player
+(y 946, 88 px), abas, capas e faixas. As bordas calculadas, desenhadas sobre uma captura
+da tela, caíram no topo de cada elemento. Não visto: a mascote andando sobre o Spotify
+na tela.
