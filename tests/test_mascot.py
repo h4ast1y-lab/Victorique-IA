@@ -99,8 +99,12 @@ def test_size_scales_and_the_dragged_anchor_is_her_hand():
     small, _ = sprite.render(Look(), 90)
     big, _ = sprite.render(Look(), 240)
     assert abs(small.height - 90) <= 2 and abs(big.height - 240) <= 2
-    img, (ax, ay) = sprite.render(Look("held", 6), H)
-    assert img.width * 0.5 < ax < img.width and img.height * 0.3 < ay < img.height * 0.75
+    for frame in range(sprite.frame_count("held")):
+        img, (ax, ay) = sprite.render(Look("held", frame), H)
+        # her hand, up on the right, right under the real cursor's tip
+        assert img.width * 0.5 < ax <= img.width and 0 <= ay < img.height * 0.5, frame
+        near = img.getchannel("A").crop((ax - 3, ay - 3, ax + 4, ay + 4))
+        assert near.getextrema()[1] == 255, frame
 
 
 def test_sleeping_frame_gets_drifting_zzz():

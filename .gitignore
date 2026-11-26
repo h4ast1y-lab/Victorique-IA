@@ -109,3 +109,8 @@ htmlcov/
 .superpowers/
 # Launcher gerado (scripts/build_launcher.py)
 /Victorique.exe
+
+# --- Sprites novos (imagens geradas e saídas intermediárias) ---
+sprites_novos/gerado/
+sprites_novos/pronto/
+sprites_novos/debug/

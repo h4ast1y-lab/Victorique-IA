@@ -15,6 +15,9 @@ the floor shadows of the jump and fall sheets, cuts the frames at the
 emptiest columns near the even grid, puts every sheet on the same scale (the
 sheets draw her at different sizes) and finds each frame's anchor.
 
+--source DIR reads sheets made by postprocess_sprites.py instead (already cut
+out, on one pixel grid and one scale, so nothing is resampled here).
+
 --debug DIR also writes a contact sheet per animation with the anchors marked
 and a line-up of one frame of each animation at the common scale.
 """
@@ -24,7 +27,7 @@ import argparse
 import json
 import sys
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -33,10 +36,18 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "app" / "mascot" / "assets" / "source"
+ORIGINAL = SOURCE       # the hand-tuned sheets, the fallback for --source
 OUT_IMAGE = ROOT / "app" / "mascot" / "assets" / "victorique.webp"
 OUT_JSON = ROOT / "app" / "mascot" / "assets" / "victorique.json"
 
 STAND_HEIGHT = 240      # standing figure height in the atlas, in px
+PREPARED = False        # sheets already cut out and scaled (--source)
+
+
+def is_prepared(sheet: "Sheet") -> bool:
+    """This sheet comes from the --source folder (a sheet missing there falls
+    back to the original one in assets/source, cut and scaled as before)."""
+    return PREPARED and (SOURCE / sheet.file).exists()
 POOL = 4                # labeling runs on a 4x4 max-pooled mask
 MIN_PART = 4            # pooled cells; smaller specks are noise
 
@@ -238,7 +249,13 @@ class Frame:
 
 
 def frames_of(sheet: Sheet) -> List[List[Frame]]:
-    img = Image.open(SOURCE / sheet.file)
+    if is_prepared(sheet):
+        sheet = replace(sheet, background="alpha", threshold=128, shadow=False)
+        img = Image.open(SOURCE / sheet.file)
+    else:
+        if PREPARED:
+            print(f"  {sheet.file}: not in {SOURCE.name}/, using the original sheet")
+        img = Image.open(ORIGINAL / sheet.file)
     mask, rgba = sheet_mask(sheet, img)
     mask = drop_specks(mask)
     h, w = mask.shape
@@ -385,17 +402,28 @@ def build(debug: Optional[Path] = None) -> Dict:
             ref = sheet.ref_height
         else:
             ref = float(np.mean([flat[i].box[3] - flat[i].box[1] for i in sheet.ref]))
-        scale = STAND_HEIGHT / ref
+        prepared = is_prepared(sheet)
+        scale = 1.0 if prepared else STAND_HEIGHT / ref
         entries = []
+        # postprocess_sprites.py already erased the drawn cursor and saved its tips
+        tips_file = SOURCE / (sheet.file.rsplit(".", 1)[0] + ".cursor.json")
+        tips = (json.loads(tips_file.read_text(encoding="utf-8"))
+                if prepared and sheet.anchor_x == "cursor" else None)
+        index = 0
         for row in rows:
             base = max(f.box[3] for f in row)
             for f in row:
-                ax, ay = anchor(sheet, f, base)
-                if sheet.anchor_x == "cursor":
-                    f = erase_cursor(f)
+                if tips is not None:
+                    tx, ty = tips[index]
+                    ax, ay = float(tx - f.box[0]), float(ty - f.box[1])
+                else:
+                    ax, ay = anchor(sheet, f, base)
+                    if sheet.anchor_x == "cursor":
+                        f = erase_cursor(f)
+                index += 1
                 w = max(1, round(f.image.width * scale))
                 h = max(1, round(f.image.height * scale))
-                small = f.image.resize((w, h), Image.LANCZOS)
+                small = f.image if prepared else f.image.resize((w, h), Image.LANCZOS)
                 entries.append((small, (ax * scale, ay * scale)))
         anims[sheet.anim] = {"facing": sheet.facing, "frames": []}
         for i, (small, anc) in enumerate(entries):
@@ -474,7 +502,12 @@ def lineup(debug: Path, packed) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--debug", type=Path, help="write contact sheets to this folder")
+    parser.add_argument("--source", type=Path,
+                        help="folder with sheets made by postprocess_sprites.py")
     args = parser.parse_args(argv)
+    if args.source:
+        global SOURCE, PREPARED
+        SOURCE, PREPARED = args.source.resolve(), True
     data = build(args.debug)
     total = sum(len(a["frames"]) for a in data["anims"].values())
     print(f"{len(data['anims'])} animações, {total} quadros -> {OUT_IMAGE.relative_to(ROOT)}")
