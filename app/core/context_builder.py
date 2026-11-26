@@ -41,7 +41,8 @@ class ContextBuilder:
         conversation_history: List[Dict[str, Any]],
         project_id: Optional[str] = None,
         personality_id: Optional[str] = None,
-        enable_rag: bool = True
+        enable_rag: bool = True,
+        native_tools: bool = False,
     ) -> Dict[str, Any]:
         """
         Assembles a coherent, token-optimized context for the LLM.
@@ -116,8 +117,9 @@ class ContextBuilder:
                 system_parts.append("\n".join(rag_lines))
 
         # 5. Tools
-        tools_desc = tool_registry.get_tool_schemas_for_prompt()
-        system_parts.append(f"\n{tools_desc}")
+        if not native_tools:
+            tools_desc = tool_registry.get_tool_schemas_for_prompt()
+            system_parts.append(f"\n{tools_desc}")
 
         if settings.tool_calling_enabled:
             turbo_note = (
@@ -129,6 +131,12 @@ class ContextBuilder:
                 turbo_note += (
                     "\nACESSO A PASTAS: você pode navegar e ler arquivos em qualquer pasta do computador."
                 )
+            call_format = (
+                "- Use as chamadas de ferramentas nativas do modelo."
+                if native_tools else
+                "- Para chamar qualquer ferramenta, emita uma resposta no formato JSON:\n"
+                '  `{"name": "nome_da_ferramenta", "arguments": {"parametro": "valor"}}`\n'
+            )
             system_parts.append(
                 "INSTRUÇÕES OBRIGATÓRIAS SOBRE FERRAMENTAS:\n"
                 "- Você TEM ferramentas integradas para interagir com o computador e com a internet.\n"
@@ -140,8 +148,7 @@ class ContextBuilder:
                 "- Quando o usuário pedir para tocar uma música, artista, álbum ou playlist no Spotify, chame "
                 "`spotify_tocar`; para pausar, continuar, pular, voltar, volume, aleatório, repetir ou curtir, "
                 "`spotify_controlar`; para pôr na fila, `spotify_fila`; para saber o que toca, `spotify_tocando`.\n"
-                "- Para chamar qualquer ferramenta, emita uma resposta no formato JSON:\n"
-                "  `{\"name\": \"nome_da_ferramenta\", \"arguments\": {\"parametro\": \"valor\"}}`\n"
+                f"{call_format}\n"
                 "- Nunca invente resultado de ferramenta. Use apenas o que a ferramenta retornar."
                 f"{turbo_note}"
             )

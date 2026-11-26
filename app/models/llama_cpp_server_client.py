@@ -21,6 +21,7 @@ import os
 import subprocess
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
@@ -28,6 +29,7 @@ import httpx
 
 from app.config import DATA_DIR
 from app.models.events import ReasoningDelta
+from app.models.llama_context import fit_chat_payload
 from app.models.windows_ports import listening_pids, stop_server_process
 
 logger = logging.getLogger("llama_cpp_server")
@@ -430,6 +432,56 @@ class LlamaCppServerClient:
             logger.debug("list_models falhou: %s", exc)
         return []
 
+    @asynccontextmanager
+    async def _chat_response(self, client: httpx.AsyncClient, payload: dict):
+        """Retry context errors before streaming any part of a response."""
+        messages = payload["messages"]
+        history_start = int(bool(messages and messages[0]["role"] == "system"))
+        user_turns = [i for i in range(history_start, len(messages)) if messages[i]["role"] == "user"]
+        history_trimmed = False
+        tool_results_compacted = False
+        while True:
+            async with client.stream(
+                "POST", f"{self._base_url}/v1/chat/completions", json=payload
+            ) as response:
+                if response.status_code == 200:
+                    yield response
+                    return
+                body = (await response.aread()).decode("utf-8", errors="replace")
+
+            try:
+                error = json.loads(body)
+                context_exceeded = error["error"]["type"] == "exceed_context_size_error"
+            except (ValueError, KeyError, TypeError):
+                context_exceeded = False
+            if response.status_code != 400 or not context_exceeded:
+                raise RuntimeError(f"llama-server error ({response.status_code}): {body}")
+
+            if len(user_turns) > 1:
+                # Remove the oldest complete turns, preserving the current turn and its tool calls.
+                drop = max(1, len(user_turns) // 2) if history_trimmed else 1
+                user_turns = user_turns[drop:]
+                payload["messages"] = messages[:history_start] + messages[user_turns[0]:]
+                history_trimmed = True
+                continue
+
+            if not tool_results_compacted:
+                current = payload["messages"]
+                compacted = [
+                    {**msg, "content": msg["content"][:1024] + "\n[resultado truncado]"}
+                    if msg["role"] == "tool" and len(msg["content"]) > 1024 else msg
+                    for msg in current
+                ]
+                if compacted != current:
+                    payload["messages"] = compacted
+                    tool_results_compacted = True
+                    continue
+
+            raise RuntimeError(
+                "A mensagem e o contexto desta rodada ultrapassam o limite do llama.cpp. "
+                "Reduza o texto ou os anexos, ou aumente o contexto nas preferências."
+            )
+
     async def chat_stream(
         self,
         messages: List[Dict[str, Any]],
@@ -476,15 +528,17 @@ class LlamaCppServerClient:
             timeout=httpx.Timeout(600.0, connect=15.0),
             transport=self._transport,
         ) as client:
-            async with client.stream(
-                "POST", f"{self._base_url}/v1/chat/completions", json=payload
-            ) as response:
-                if response.status_code != 200:
-                    err_body = await response.aread()
-                    raise RuntimeError(
-                        f"llama-server error ({response.status_code}): "
-                        f"{err_body.decode('utf-8', errors='ignore')}"
+            if num_ctx and max_tokens > 0:
+                last_user = next((msg for msg in reversed(messages) if msg["role"] == "user"), {})
+                try:
+                    payload = await fit_chat_payload(
+                        client, self._base_url, payload, min(num_ctx, self.n_ctx),
+                        last_user.get("attachment_previews"),
                     )
+                except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                    # Older servers may lack one of the tokenization endpoints.
+                    logger.debug("Contagem prévia de contexto indisponível: %s", exc)
+            async with self._chat_response(client, payload) as response:
                 async for line in response.aiter_lines():
                     if not line.startswith("data: "):
                         continue

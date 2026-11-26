@@ -139,7 +139,8 @@ def _attach_to_last_user_message(messages: List[Dict[str, Any]], files: List[Dic
             continue
         pictures = chat_attachments.images(files)
         inline = backend_name == "ollama" and bool(pictures)
-        note = chat_attachments.prompt_note(files, images_inline=inline)
+        split_previews = backend_name in ("llama-cpp", "llama-cpp-server")
+        note = chat_attachments.prompt_note(files, with_preview=not split_previews, images_inline=inline)
         if pictures and not inline:
             note += ("\n(Este motor local não recebe imagens: diga ao usuário que, para ver a "
                      "imagem, use o modo Claude Code ou um modelo do Ollama com visão.)")
@@ -147,6 +148,11 @@ def _attach_to_last_user_message(messages: List[Dict[str, Any]], files: List[Dic
         short = chat_attachments.history_note([chat_attachments.public(f) for f in files])
         content = (message.get("content") or "").replace(short, "").strip()
         message["content"] = (content + "\n\n" + note).strip()
+        if split_previews:
+            previews = chat_attachments.prompt_previews(files)
+            if previews:
+                message["attachment_previews"] = previews
+                message["content"] += "\n\n" + previews
         if inline:
             message["images"] = [chat_attachments.image_base64(f)[1] for f in pictures]
         return
@@ -417,7 +423,9 @@ class AssistantEngine:
                 conversation_history=history,
                 project_id=project_id,
                 personality_id=personality_id,
-                enable_rag=enable_rag
+                enable_rag=enable_rag,
+                native_tools=backend_name in ("llama-cpp", "llama-cpp-server")
+                and not use_llama_cpp_lib and settings.tool_calling_enabled,
             )
             if files:
                 _attach_to_last_user_message(ctx["messages"], files, backend_name)

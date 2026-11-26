@@ -293,6 +293,13 @@ def prompt_note(rows: List[Dict[str, Any]], with_preview: bool = True,
     return "\n".join(lines)
 
 
+def prompt_previews(rows: List[Dict[str, Any]]) -> str:
+    return "\n\n".join(
+        f"Prévia de {row['name']}:\n{_indent(document_preview(row))}"
+        for row in rows if row["kind"] != "image"
+    )
+
+
 def history_note(attachments: List[Dict[str, Any]]) -> str:
     """Short line for older messages (names only)."""
     if not attachments:

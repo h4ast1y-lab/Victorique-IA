@@ -703,6 +703,11 @@ async def chat_endpoint(req: ChatRequest, request: Request):
     if backend not in VALID_BACKENDS:
         raise HTTPException(status_code=400, detail="Modo inválido.")
 
+    model = (req.model or "").strip()
+    # Clientes antigos podiam reenviar o caminho GGUF ao trocar para Ollama.
+    if not model or (backend == "ollama" and model.lower().endswith(".gguf")):
+        model = _current_model()
+
     # Check the attachments before creating anything.
     for att_id in req.attachments:
         row = chat_attachments.get(att_id)
@@ -726,7 +731,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         agen = assistant_engine.chat_stream(
             conversation_id=conv["id"],
             user_message=req.message,
-            model=req.model or _current_model(),
+            model=model,
             backend=backend,
             project_id=req.project_id,
             personality_id=req.personality_id,

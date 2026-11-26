@@ -52,6 +52,88 @@ async def test_reasoning_is_yielded_separately_from_content():
 
 
 @pytest.mark.asyncio
+async def test_context_overflow_retries_without_the_oldest_turn():
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        if len(payloads) == 1:
+            return httpx.Response(400, json={"error": {
+                "type": "exceed_context_size_error", "n_prompt_tokens": 8263, "n_ctx": 8192,
+            }})
+        return httpx.Response(200, content=_sse(_delta(content="Oi!")))
+
+    client = LlamaCppServerClient(transport=httpx.MockTransport(handler))
+    client._available = True
+    messages = [
+        {"role": "user", "content": "pergunta antiga"},
+        {"role": "assistant", "content": "resposta antiga"},
+        {"role": "user", "content": "oi"},
+        {"role": "assistant", "tool_calls": [
+            {"id": "call_a", "function": {"name": "calculate", "arguments": {}}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_a", "content": "42"},
+    ]
+    tools = [{"type": "function", "function": {"name": "calculate", "parameters": {}}}]
+    result = [x async for x in client.chat_stream(messages, system_prompt="Instruções", tools=tools)]
+
+    assert result == ["Oi!"]
+    assert payloads[1]["messages"] == payloads[0]["messages"][:1] + to_openai_messages(messages[2:])
+    assert payloads[1]["tools"] == tools
+    assert len(messages) == 5
+
+
+@pytest.mark.asyncio
+async def test_context_is_budgeted_before_generation():
+    sent = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        if request.url.path == "/apply-template":
+            return httpx.Response(200, json={"prompt": json.dumps(payload, ensure_ascii=False)})
+        if request.url.path == "/tokenize":
+            return httpx.Response(200, json={"tokens": list(map(ord, payload["content"]))})
+        if request.url.path == "/detokenize":
+            return httpx.Response(200, json={"content": "".join(map(chr, payload["tokens"]))})
+        assert request.url.path == "/v1/chat/completions"
+        sent.append(payload)
+        return httpx.Response(200, content=_sse(_delta(content="Certo.")))
+
+    client = LlamaCppServerClient(n_ctx=8192, transport=httpx.MockTransport(handler))
+    client._available = True
+    previews = "Prévia de relatório: " + "a" * 4000
+    tool_result = "Resultado: " + "b" * 3000
+    messages = [
+        {"role": "user", "content": "pergunta antiga " + "z" * 10000},
+        {"role": "assistant", "content": "Resposta antiga."},
+        {"role": "user", "content": "pergunta recente"},
+        {"role": "assistant", "content": "Resposta recente."},
+        {"role": "user", "content": "Pedido atual\nAnexo: relatório\n\n" + previews,
+         "attachment_previews": previews},
+        {"role": "assistant", "tool_calls": [
+            {"id": "call_a", "function": {"name": "read_file", "arguments": {}}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_a", "content": tool_result},
+    ]
+    result = [x async for x in client.chat_stream(
+        messages, system_prompt="Instruções", num_ctx=8192, max_tokens=8192,
+    )]
+
+    assert result == ["Certo."] and len(sent) == 1
+    request = sent[0]
+    system, recent, _, current, call, tool = request["messages"]
+    assert "Resumo de falas antigas" in system["content"] and "pergunta antiga" in system["content"]
+    assert recent["content"] == "pergunta recente"
+    assert current["content"].startswith("Pedido atual\nAnexo: relatório")
+    assert current["content"].endswith("[prévia truncada]")
+    assert tool["tool_call_id"] == call["tool_calls"][0]["id"] == "call_a"
+    assert tool["content"].startswith("Resultado: ") and tool["content"].endswith("[resultado truncado]")
+    size = len(json.dumps({"messages": request["messages"]}, ensure_ascii=False))
+    assert 1024 <= request["max_tokens"] <= 8192 - size
+    assert messages[-1]["content"] == tool_result
+
+
+@pytest.mark.asyncio
 async def test_native_tool_call_deltas_are_accumulated_and_tools_are_sent():
     captured = {}
     client = _client_with(_sse(

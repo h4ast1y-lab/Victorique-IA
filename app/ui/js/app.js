@@ -1508,7 +1508,7 @@ async function sendMessage() {
         conversation_id: currentConversationId,
         message: text,
         attachments: sentAttachments.map(a => a.id),
-        model: selectedModel || undefined,
+        model: currentBackend === 'ollama' ? selectedModel || undefined : undefined,
         backend: currentBackend || undefined,
         project_id: currentProjectId,
         personality_id: currentPersonalityId,
@@ -1551,7 +1551,6 @@ async function sendMessage() {
 
         if (data.type === 'meta') {
           if (data.conversation_id) currentConversationId = data.conversation_id;
-          if (data.model) { selectedModel = data.model; updateModelTag(); }
         } else if (data.type === 'sources') {
           renderCitations(citationsContainer, data.data || []);
         } else if (data.type === 'tool_call') {

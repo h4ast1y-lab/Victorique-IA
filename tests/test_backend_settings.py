@@ -38,6 +38,24 @@ def test_chat_uses_persisted_backend(client, restore_backend, monkeypatch):
     assert seen["backend"] == "claude-code"
 
 
+@pytest.mark.parametrize(("requested", "expected"), [
+    (r"C:\models\Qwen.gguf", "qwen2.5-coder:7b"),
+    ("qwen2.5:3b", "qwen2.5:3b"),
+])
+def test_ollama_ignores_stale_gguf_selection(client, monkeypatch, requested, expected):
+    seen = {}
+
+    async def fake_chat_stream(**kwargs):
+        seen.update(kwargs)
+        yield 'data: {"type": "done"}\n\n'
+
+    monkeypatch.setattr("app.main._current_model", lambda: "qwen2.5-coder:7b")
+    monkeypatch.setattr("app.main.assistant_engine.chat_stream", fake_chat_stream)
+    response = client.post("/api/chat", json={"message": "oi", "backend": "ollama", "model": requested})
+    assert response.status_code == 200
+    assert seen["model"] == expected
+
+
 def test_claude_session_roundtrip():
     conv = conversation_store.create_conversation(title="Sessão")
     assert conversation_store.get_claude_session(conv["id"]) is None
