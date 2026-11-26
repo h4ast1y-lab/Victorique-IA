@@ -1,9 +1,12 @@
+import ipaddress
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import uvicorn
@@ -62,6 +65,62 @@ def ollama_url() -> str:
     return os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 
 
+def ollama_executable():
+    installed = Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
+    return str(installed) if installed.is_file() else shutil.which("ollama")
+
+
+def restart_local_ollama():
+    from app.models.windows_ports import listening_pids, stop_server_process
+
+    url = urlsplit(ollama_url())
+    host = url.hostname
+    if host != "localhost":
+        try:
+            local = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            local = False
+        if not local:
+            print("[Ollama] Endereço externo configurado. O reinício se aplica ao servidor local.")
+            return
+    port = url.port or (443 if url.scheme == "https" else 80)
+    executable = ollama_executable()
+    if not executable:
+        raise RuntimeError("Executável do Ollama não encontrado.")
+
+    previous = listening_pids(port, host)
+    for pid in previous:
+        stop_server_process(pid, "ollama", tree=True)
+    deadline = time.monotonic() + 5
+    current = listening_pids(port, host) if previous else set()
+    while previous & current:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"A porta {port} continua ocupada. Não foi possível reiniciar o Ollama.")
+        time.sleep(0.2)
+        current = listening_pids(port, host)
+
+    # O aplicativo de bandeja do Ollama pode já ter iniciado outro daemon.
+    if not current:
+        env = os.environ.copy()
+        env.setdefault("OLLAMA_HOST", url.netloc)
+        subprocess.Popen(
+            [executable, "serve"], env=env, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    deadline = time.monotonic() + 20
+    with httpx.Client(timeout=1.0, trust_env=False) as client:
+        while time.monotonic() < deadline:
+            try:
+                response = client.get(f"{ollama_url()}/api/version")
+                if response.is_success and response.json().get("version"):
+                    print(f"[OK] Novo servidor Ollama disponível em {ollama_url()}.")
+                    return
+            except (httpx.HTTPError, ValueError, AttributeError):
+                pass
+            time.sleep(0.25)
+    raise RuntimeError(f"O novo servidor Ollama não respondeu em {ollama_url()}.")
+
+
 def ensure_ollama_running():
     """Checks if Ollama daemon is running, otherwise launches it."""
     try:
@@ -72,8 +131,8 @@ def ensure_ollama_running():
     except Exception:
         pass
 
-    ollama_path = Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
-    if ollama_path.exists():
+    ollama_path = ollama_executable()
+    if ollama_path:
         print("Iniciando serviço local do Ollama em segundo plano...")
         subprocess.Popen(
             [str(ollama_path), "serve"],
@@ -84,7 +143,7 @@ def ensure_ollama_running():
         time.sleep(3)
         return True
 
-    print("[AVISO] Executável do Ollama não encontrado no caminho padrão.")
+    print("[AVISO] Executável do Ollama não encontrado.")
     print("        O chat local não funcionará até iniciar o Ollama manualmente.")
     return False
 
@@ -164,12 +223,14 @@ def main():
     headless = "--server" in args
     use_browser = "--browser" in args or headless
 
-    # Ollama is started (and its model checked) only in Ollama mode: in
-    # Claude Code / Codex / llama.cpp mode it would just cost seconds at every
-    # start and a background process that nothing uses.
     backend = saved_backend()
     use_ollama = backend == "ollama" and "--no-ollama" not in args
-    if use_ollama:
+    if os.environ.get("VICTORIQUE_RESTART_LOCAL_SERVERS") == "1" and "--no-ollama" not in args:
+        try:
+            restart_local_ollama()
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            sys.exit(f"Erro ao reiniciar o Ollama: {exc}")
+    elif use_ollama:
         ensure_ollama_running()
 
     from app.config import settings

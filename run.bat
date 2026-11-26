@@ -13,6 +13,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo Iniciando Victorique...
+set "VICTORIQUE_RESTART_LOCAL_SERVERS=1"
 ".venv\Scripts\python.exe" run.py %*
 
 if errorlevel 1 (

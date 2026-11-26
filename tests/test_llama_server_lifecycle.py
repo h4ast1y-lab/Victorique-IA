@@ -201,6 +201,15 @@ def test_leftover_is_kept_when_no_new_server_can_be_started(fake_server, monkeyp
     assert spawned == []
 
 
+def test_batch_launch_refuses_a_stale_llama_server(fake_server, monkeypatch):
+    client, spawned = fake_server
+    monkeypatch.setenv("VICTORIQUE_RESTART_LOCAL_SERVERS", "1")
+    monkeypatch.setattr(client, "is_alive", lambda: True)
+    assert client.start() is False
+    assert not client.available and not spawned
+    assert "reiniciar" in client.status()["error"]
+
+
 def test_own_server_that_died_is_started_again(fake_server, monkeypatch):
     client, spawned = fake_server
     orig_is_alive = client.is_alive
@@ -242,13 +251,13 @@ def test_stop_while_loading_cancels_the_start(fake_server, monkeypatch):
     assert client.status()["starting"] is False
 
 
-# --- Closing the leftover server (netstat / tasklist / taskkill) ---------------
+# --- Closing the leftover server on Windows ------------------------------------
 
-windows_only = pytest.mark.skipif(os.name != "nt", reason="usa netstat/tasklist/taskkill")
+windows_only = pytest.mark.skipif(os.name != "nt", reason="usa as ferramentas do Windows")
 
 
 class FakeWindowsTools:
-    """Answers netstat/tasklist/taskkill like Windows does."""
+    """Simulates TCP listeners and the Windows process-name check."""
 
     def __init__(self, port, listeners, names, frees_port=True):
         self.port = port
@@ -261,16 +270,16 @@ class FakeWindowsTools:
         from types import SimpleNamespace
         if args[0] == "netstat":
             return SimpleNamespace(stdout="\n".join(self.listeners.values()))
-        if args[0] == "tasklist":
-            pid = args[2].split()[-1]
-            name = self.names.get(pid)
-            return SimpleNamespace(stdout=f'"{name}","{pid}","Console","1","5.000 K"' if name else "")
-        if args[0] == "taskkill":
-            pid = args[2]
+        if args[0] == "powershell.exe":
+            env = kwargs["env"]
+            pid = env["VICTORIQUE_SERVER_PID"]
+            names = env["VICTORIQUE_SERVER_NAMES"].split("|")
+            if self.names[pid].removesuffix(".exe") not in names:
+                return SimpleNamespace(returncode=1)
             self.killed.append(pid)
             if self.frees_port:
                 self.listeners.pop(pid, None)
-            return SimpleNamespace(stdout="")
+            return SimpleNamespace(returncode=0)
         raise AssertionError(args)
 
 

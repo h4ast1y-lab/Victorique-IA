@@ -28,6 +28,7 @@ import httpx
 
 from app.config import DATA_DIR
 from app.models.events import ReasoningDelta
+from app.models.windows_ports import listening_pids, stop_server_process
 
 logger = logging.getLogger("llama_cpp_server")
 
@@ -270,39 +271,9 @@ class LlamaCppServerClient:
         if os.name != "nt":
             return set()
         try:
-            out = subprocess.run(
-                ["netstat", "-ano"], capture_output=True, text=True, errors="replace",
-                timeout=10, creationflags=subprocess.CREATE_NO_WINDOW,
-            ).stdout
+            return listening_pids(self.port, self.host)
         except Exception:
             return set()
-        pids = set()
-        for line in out.splitlines():
-            parts = line.split()
-            # TCP  127.0.0.1:8899  0.0.0.0:0  LISTENING  1234
-            if len(parts) < 5 or not parts[0].upper().startswith("TCP"):
-                continue
-            if not parts[1].endswith(f":{self.port}"):
-                continue
-            # The state word is translated on some Windows languages; a
-            # listening socket is also the one with no remote port.
-            listening = parts[3].upper() == "LISTENING" or parts[2].endswith(":0")
-            if listening and parts[-1].isdigit() and parts[-1] != "0":
-                pids.add(parts[-1])
-        return pids
-
-    def _is_server_process(self, pid: str) -> bool:
-        """O processo ``pid`` é um llama-server (pelo nome do executável)?"""
-        try:
-            info = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, errors="replace", timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            ).stdout.lower()
-        except Exception:
-            return False
-        names = {"llama-server", self.server_exe.stem.lower()}
-        return any(f'"{name}.exe"' in info or f'"{name}"' in info for name in names if name)
 
     def _kill_orphan_on_port(self) -> bool:
         """Encerra o llama-server que ficou na porta de uma execução anterior.
@@ -315,21 +286,19 @@ class LlamaCppServerClient:
         """
         if os.name != "nt":
             return False
-        victims = [pid for pid in self._listening_pids() if self._is_server_process(pid)]
+        victims = set()
+        for pid in self._listening_pids():
+            try:
+                if stop_server_process(pid, "llama-server", self.server_exe.stem):
+                    victims.add(pid)
+            except (OSError, subprocess.SubprocessError):
+                continue
         if not victims:
             return False
-        for pid in victims:
-            try:
-                subprocess.run(
-                    ["taskkill", "/PID", pid, "/F"], capture_output=True, timeout=10,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            except Exception:
-                continue
         # TerminateProcess is asynchronous: wait for the port to be released,
         # or the new server fails to bind it.
         for _ in range(40):
-            if not set(victims) & self._listening_pids():
+            if victims.isdisjoint(self._listening_pids()):
                 return True
             time.sleep(0.25)
         logger.warning("llama-server antigo (PID %s) não liberou a porta %s",
@@ -354,6 +323,10 @@ class LlamaCppServerClient:
         if can_spawn and self._kill_orphan_on_port():
             logger.info("llama-server antigo na porta %s encerrado; subindo um novo", self.port)
         elif self.is_alive():
+            if os.environ.get("VICTORIQUE_RESTART_LOCAL_SERVERS") == "1":
+                self._init_error = f"Não foi possível reiniciar o llama.cpp em {self._base_url}."
+                logger.error(self._init_error)
+                return False
             # It could not be replaced (another program on the port, no
             # permission, or no exe/model to start ours): use it, not fail.
             self._available = True

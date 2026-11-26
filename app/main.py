@@ -258,10 +258,10 @@ def _current_backend() -> str:
 
 LLAMA_MODES = ("llama-cpp", "llama-cpp-server")
 
-# Auto-start do servidor llama.cpp em segundo plano, só quando o modo salvo é
-# local: o modelo pode levar minutos para carregar e a API responde enquanto isso.
-# Each start replaces a llama-server left on the port by an earlier run.
-if settings.llama_cpp_auto_start and _current_backend() in LLAMA_MODES:
+# O run.bat inicia o modelo em segundo plano em qualquer modo salvo.
+if settings.llama_cpp_auto_start and (
+    os.environ.get("VICTORIQUE_RESTART_LOCAL_SERVERS") == "1" or _current_backend() in LLAMA_MODES
+):
     llama_cpp_server.start_in_background(wait_seconds=180)
 # Encerra o llama-server iniciado por este app ao sair (libera a VRAM).
 atexit.register(llama_cpp_server.stop)

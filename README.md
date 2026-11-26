@@ -88,9 +88,12 @@ winget install --id UB-Mannheim.TesseractOCR   :: opcional, para OCR
 :: Baixar manualmente o modelo GGUF para llama.cpp (não é baixado automaticamente)
 ```
 
-Nada é baixado automaticamente pelo aplicativo. O `run.py` apenas inicia o processo
-local do Ollama quando ele já está instalado. O `llama-server.exe` é iniciado
-automaticamente pelo backend quando `ASSISTANT_DEFAULT_BACKEND=llama-cpp`.
+Ao abrir o `run.bat`, a Victorique reinicia o Ollama local e o llama.cpp mesmo
+quando outro modo de conversa está selecionado. Isso interrompe os pedidos em
+andamento da execução anterior. O inicializador aguarda a API do Ollama responder
+e o llama.cpp carrega o modelo em segundo plano. A opção `--no-ollama` e a
+configuração `ASSISTANT_LLAMA_CPP_AUTO_START=0` desativam a inicialização dos
+respectivos servidores. Nenhum modelo é baixado automaticamente.
 
 ---
 
