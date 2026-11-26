@@ -28,6 +28,9 @@ MOMENTS = {
     "organizado": "Você acabou de concluir uma organização de arquivos que o usuário aprovou.",
     "retorno": "O usuário voltou ao computador depois de um bom tempo fora.",
     "tedio": "O usuário não fala com você há um bom tempo e você está entediada.",
+    "musica": "O usuário está ouvindo uma música no Spotify. Você só sabe o título, o artista e, às "
+              "vezes, o álbum: não ouve o som nem conhece a letra, então não cite nem invente versos. "
+              "Comente a escolha com o seu jeito; sobre o artista, diga só o que tiver certeza.",
 }
 
 RULES = """\

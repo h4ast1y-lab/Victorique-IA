@@ -7,11 +7,16 @@ rectangles front to back, and this module turns them into walkable segments.
 A window's top edge is walkable where no window in front of it covers the
 edge line; a covered stretch splits it into several segments that share the
 window's key ("w<hwnd>").
+
+Some apps also have ledges inside their window (app/spotify/layout.py: the
+player bar, the panels, tabs and covers). They follow the same rule, are kept
+even when the window is maximized and use the key "w<hwnd>/<name>", so the
+mascot still knows which window she rides on.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 Area = Tuple[float, float, float, float]   # left, top, right, bottom
 
@@ -24,6 +29,30 @@ class WindowBox:
     right: int
     bottom: int
     maximized: bool = False
+    app: str = ""       # "spotify" for a window whose inside she can walk on
+
+
+@dataclass(frozen=True)
+class Ledge:
+    """A line inside a window she can stand on (screen pixels)."""
+    name: str
+    left: float
+    right: float
+    y: float
+    bottom: float       # the bottom of the thing whose top is this line
+
+
+LedgesFn = Callable[[WindowBox], Sequence[Ledge]]
+
+
+def window_hwnd(key: str) -> Optional[int]:
+    """The window handle in a surface key ("w123" or "w123/player")."""
+    if not key.startswith("w"):
+        return None
+    try:
+        return int(key[1:].split("/", 1)[0])
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -97,6 +126,17 @@ def _subtract(segments: List[Tuple[float, float]], lo: float, hi: float) -> List
     return out
 
 
+def _uncovered(segments: List[Tuple[float, float]], front: Sequence[WindowBox],
+               y: float) -> List[Tuple[float, float]]:
+    """What is left of `segments` on line y once the windows in `front` are drawn over it."""
+    for above in front:
+        if above.top <= y + 1 < above.bottom:
+            segments = _subtract(segments, above.left, above.right)
+            if not segments:
+                break
+    return segments
+
+
 def window_tops(windows: Sequence[WindowBox], area: Area, height: float) -> List[Surface]:
     """Visible, roomy top edges of `windows` (front to back) on this monitor."""
     left, top, right, bottom = area
@@ -109,11 +149,7 @@ def window_tops(windows: Sequence[WindowBox], area: Area, height: float) -> List
         if w.right <= left or w.left >= right:
             continue
         segments = [(float(max(w.left, left)), float(min(w.right, right)))]
-        for above in windows[:i]:
-            if above.top <= w.top + 1 < above.bottom:
-                segments = _subtract(segments, above.left, above.right)
-                if not segments:
-                    break
+        segments = _uncovered(segments, windows[:i], w.top)
         for a, b in segments:
             if b - a >= height * 0.45:
                 out.append(Surface(f"w{w.hwnd}", a, b, float(w.top), "window",
@@ -121,6 +157,38 @@ def window_tops(windows: Sequence[WindowBox], area: Area, height: float) -> List
     return out
 
 
-def build_world(area: Area, height: float, windows: Iterable[WindowBox] = ()) -> World:
-    surfaces = [ground(area)] + window_tops(list(windows), area, height)
+def window_ledges(windows: Sequence[WindowBox], area: Area, height: float,
+                  ledges_fn: LedgesFn) -> List[Surface]:
+    """Visible, roomy ledges inside the `windows` (front to back) on this monitor.
+    Unlike the top edges, a maximized window keeps its ledges."""
+    left, top, right, bottom = area
+    out: List[Surface] = []
+    for i, w in enumerate(windows):
+        try:
+            ledges = ledges_fn(w) or ()
+        except Exception:
+            continue
+        for ledge in ledges:
+            y = float(ledge.y)
+            if y < top + height * 0.65 or y > bottom - height * 0.3:
+                continue    # no room above it for her, or it is down at the taskbar
+            if not w.top <= y < w.bottom:
+                continue
+            a = float(max(ledge.left, w.left, left))
+            b = float(min(ledge.right, w.right, right))
+            if b - a < height * 0.45:
+                continue
+            for sa, sb in _uncovered([(a, b)], windows[:i], y):
+                if sb - sa >= height * 0.45:
+                    out.append(Surface(f"w{w.hwnd}/{ledge.name}", sa, sb, y, "window",
+                                       float(ledge.left), float(ledge.right), float(ledge.bottom)))
+    return out
+
+
+def build_world(area: Area, height: float, windows: Iterable[WindowBox] = (),
+                ledges: Optional[LedgesFn] = None) -> World:
+    windows = list(windows)
+    surfaces = [ground(area)] + window_tops(windows, area, height)
+    if ledges is not None:
+        surfaces += window_ledges(windows, area, height, ledges)
     return World(area=area, height=height, surfaces=surfaces)

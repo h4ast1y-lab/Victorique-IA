@@ -92,6 +92,9 @@ WS_EX_TRANSPARENT = 0x00000020
 WS_EX_APPWINDOW = 0x00040000
 DWMWA_EXTENDED_FRAME_BOUNDS = 9
 DWMWA_CLOAKED = 14
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# Apps whose inside she can walk on (surfaces.WindowBox.app), by executable.
+APP_PROCESSES = {"spotify.exe": "spotify"}
 # Shell surfaces that are not windows she can stand on.
 SKIP_CLASSES = {"progman", "workerw", "shell_traywnd", "shell_secondarytraywnd",
                 "windows.ui.core.corewindow", "victoriquemascot"}
@@ -177,6 +180,13 @@ def _signatures() -> None:
     user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                    ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     if dwmapi is not None:
         dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD]
         dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
@@ -246,10 +256,67 @@ def window_box(hwnd: int):
     return WindowBox(int(hwnd), rect.left, rect.top, rect.right, rect.bottom, bool(user32.IsZoomed(hwnd)))
 
 
+_process_cache: dict = {}
+
+
+def process_name(hwnd: int) -> str:
+    """Lower-case executable name of the process that owns `hwnd` ("" if unknown)."""
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return ""
+    cached = _process_cache.get(pid.value)
+    if cached is not None:
+        return cached
+    name = ""
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if handle:
+        try:
+            size = wintypes.DWORD(1024)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                name = os.path.basename(buffer.value).lower()
+        finally:
+            kernel32.CloseHandle(handle)
+    if len(_process_cache) > 256:
+        _process_cache.clear()
+    _process_cache[pid.value] = name
+    return name
+
+
+def window_title(hwnd: int) -> str:
+    length = user32.GetWindowTextLengthW(hwnd)
+    if length <= 0:
+        return ""
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, buffer, length + 1)
+    return buffer.value
+
+
+def app_windows(process: str) -> List[Tuple[int, str]]:
+    """(hwnd, title) of the visible, titled top-level windows of `process`
+    (e.g. "spotify.exe"), front to back."""
+    found: List[Tuple[int, str]] = []
+    process = process.lower()
+
+    def visit(hwnd, _lparam):
+        try:
+            if hwnd and user32.IsWindowVisible(hwnd) and user32.GetWindowTextLengthW(hwnd) > 0 \
+                    and process_name(hwnd) == process:
+                found.append((int(hwnd), window_title(hwnd)))
+        except Exception:
+            pass
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(visit), 0)
+    return found
+
+
 def top_windows(exclude: Sequence[int] = ()) -> list:
     """Visible application windows, front to back (the z-order), as
     surfaces.WindowBox. Untitled, tool and click-through windows and the
     desktop and taskbar are left out. Physical pixels on a DPI-aware thread."""
+    from app.mascot.surfaces import WindowBox
     skip = {int(h) for h in exclude if h}
     found: list = []
     name = ctypes.create_unicode_buffer(64)
@@ -268,6 +335,11 @@ def top_windows(exclude: Sequence[int] = ()) -> list:
                 return True
             box = window_box(hwnd)
             if box is not None:
+                if name.value.lower().startswith("chrome_widgetwin"):
+                    app = APP_PROCESSES.get(process_name(hwnd), "")
+                    if app:
+                        box = WindowBox(box.hwnd, box.left, box.top, box.right, box.bottom,
+                                        box.maximized, app)
                 found.append(box)
         except Exception:
             pass

@@ -22,7 +22,7 @@ LAUNCH_RETURN_AFTER = 6 * 3600  # app reopened after this long
 ATTEMPT_COOLDOWN = 60
 SCAN_EVERY = 30 * 60
 FOLDER_REPEAT = 7 * 24 * 3600
-QUEUE_TTL = {"organizado": 10 * 60, "retorno": 5 * 60}
+QUEUE_TTL = {"organizado": 10 * 60, "retorno": 5 * 60, "musica": 4 * 60}
 RECENT_KEEP = 12
 HOUR = 3600
 

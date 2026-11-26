@@ -185,6 +185,9 @@ def main():
         sys.exit(1)
 
     print("[OK] Backend inicializado com sucesso!")
+    # Vê a música tocando no Spotify para ela comentar (app/spotify).
+    from app.spotify.watcher import spotify_watcher
+    spotify_watcher.start()
     if use_ollama:
         check_configured_model()
 

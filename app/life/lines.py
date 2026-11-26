@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from app.config import DATA_DIR
 
 FACTORY_FILE = Path(__file__).with_name("falas_padrao.md")
-CATEGORIES = ("tarde", "bagunca", "organizado", "retorno", "tedio")
+CATEGORIES = ("tarde", "bagunca", "organizado", "retorno", "tedio", "musica")
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 

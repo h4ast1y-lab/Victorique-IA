@@ -162,6 +162,10 @@ avisa e continua a conversa sem execução automática.
   pasta; sem ele, só os diretórios autorizados são acessíveis. Um não liga o outro.
 - **Raciocínio do modelo**: o `reasoning_content` do Qwen 3.5 chega como evento
   `reasoning`, aparece recolhido na interface e não é salvo, falado nem reenviado ao modelo.
+- **Spotify (seção 20)**: para ela comentar a música, o app lê só o que toca no Spotify
+  (título, artista e álbum), pelo título da janela do Spotify, pelos controles de mídia
+  do Windows ou pela ponte do Spicetify, que fala só com `127.0.0.1`. Nenhuma outra
+  janela tem o título lido. No modo Claude Code, o nome da música vai no pedido da fala.
 - **Isolamento por projeto**: conversas, memórias e documentos são filtrados pelo projeto
   ativo. Um chat sem projeto usa apenas documentos globais — nunca recupera conteúdo de
   outro projeto (verificado por teste automatizado e no E2E).
@@ -431,12 +435,15 @@ app/
   codex/      backend.py  (modo Codex: `codex exec --json`, somente leitura)
   mascot/     sprite.py, behavior.py, surfaces.py, balloon.py, win32.py, desktop.py, bus.py,
               launcher.py, assets/ (victorique.webp + victorique.json; source/ com as 20 folhas)
+  spotify/    layout.py (bordas dentro do Spotify), bridge.py + victorique.js (ponte do
+              Spicetify), spicetify.py (instalador), nowplaying.py, track.py, watcher.py
   rag/        document_loader.py, text_splitter.py, vector_store.py
   security/   path_guard.py, permissions.py
   tools/      registry.py, file_tools.py, system_tools.py, web_search.py
   ui/         index.html, mini.html, css/ (style.css, mini.css),
               js/ (app.js, markdown.js, thought.js, library.js, mini.js), vendor/katex/
-scripts/      build_mascot_sprites.py  (gera o atlas da mascote a partir das folhas)
+scripts/      build_mascot_sprites.py  (gera o atlas da mascote a partir das folhas),
+              install_spicetify.py  (instala a ponte do Spotify)
 tests/
 data/         assistant.db, documents/, backups/  (não versionar)
 ```
@@ -614,6 +621,7 @@ só uma linha com o estado dela e a lua do não perturbar.
   ela cai no que estiver embaixo. Só vale a parte visível da borda: uma janela na frente
   divide o caminho. Ficam de fora as janelas maximizadas, sem título, de ferramenta e as
   que deixam o clique passar. Desligue em Configurações → «Subir nas janelas abertas».
+  Exceção: no Spotify, mesmo maximizado, ela anda por dentro (seção 20).
 - **Com o mouse:** arraste-a pela mão: ela fica pendurada na ponta da seta do Windows,
   que continua visível. A pose só muda quando o mouse se mexe: parado, ela fica quieta;
   puxada devagar, se inclina; puxada rápido, voa atrás da mão, sempre do lado oposto ao
@@ -919,3 +927,61 @@ envios ruins recusados, mensagem só com anexos, exclusão com a conversa, o que
 motor recebe). No navegador, em 24/11/2026: colar um print e um CSV, as etiquetas na
 caixa, o envio, as miniaturas e o visualizador, reabrir a conversa e apagá-la. Com o
 Claude Code real: ela leu o texto e a cor de fundo de uma imagem anexada.
+
+---
+
+## 20. Victorique no Spotify
+
+Com o Spotify aberto, ela anda por dentro dele e comenta a música que toca.
+
+- **Por dentro da janela:** ela sobe na barra do player e na borda de cima dos painéis
+  (abaixo da barra de navegação), pula entre eles e desce. Vale **também com o Spotify
+  maximizado**, a única janela maximizada em que ela entra (no maximizado, a borda de
+  cima dos painéis fica colada no topo da tela e não tem espaço para ela; sobram a barra
+  do player e o que a ponte informar). Arrastada e solta sobre o Spotify, ela cai na
+  primeira borda abaixo. Uma janela na frente divide o caminho, como nas outras.
+- **Com a ponte do Spicetify:** ela também pisa nas abas e nos filtros, nas capas e nas
+  primeiras faixas das listas, nas posições exatas, e acompanha a página quando você
+  rola. Instale em Configurações → Na área de trabalho → «Instalar a ponte do
+  Spicetify» (o Spotify reinicia) ou com
+  `.venv\Scripts\python.exe scripts\install_spicetify.py`. Precisa do
+  [Spicetify](https://spicetify.app); na primeira vez, rode `spicetify backup apply`. Sem a
+  ponte, ou se ela parar de responder por 6 s, valem as bordas pelo formato padrão do
+  Spotify (64 px de navegação no topo, 72 px de player embaixo).
+- **Comentários:** depois de 20 s ouvindo uma faixa nova (pular não conta), ela pode
+  comentar a escolha no balão. Passa pelos mesmos portões e limites da vida própria
+  (seção 13): silêncio, não perturbar, intervalo mínimo, limite por hora e apps calados.
+  A mesma faixa não é comentada de novo na mesma sessão. O modelo só recebe título,
+  artista e álbum e não pode citar letra. O banco de falas ganhou a seção `## musica`
+  (marcadores `{musica}`, `{artista}`, `{album}`).
+- **De onde vem a música:** a ponte; os controles de mídia do Windows (SMTC, se os pacotes
+  `winrt` opcionais do `requirements.txt` estiverem instalados); ou o título da janela do
+  Spotify («Artista - Música»; pausado, ele vira «Spotify Premium»).
+- **Configurações:** «Andar pelo Spotify» (Na área de trabalho; depende de «Subir nas
+  janelas abertas») e «Comentar as músicas do Spotify» (Vida própria). O cartão de estado
+  mostra se a ponte está conectada e o que toca. «Testar uma fala agora» tem a opção
+  «Música no Spotify».
+
+Como funciona: `win32.top_windows` marca as janelas do `Spotify.exe`. Para elas,
+`spotify/layout.py` devolve bordas (`surfaces.Ledge`), que `surfaces.window_ledges`
+transforma em superfícies com a chave `w<hwnd>/<nome>`. Por isso ela continua sabendo em
+que janela está, vai junto quando a janela é arrastada e cai quando ela fecha. A ponte
+(`spotify/victorique.js`) roda dentro do Spotify e manda, por WebSocket para
+`127.0.0.1:8765/api/spotify/ws` (ou POST em `/api/spotify/bridge`, se não houver
+WebSocket), o tamanho da página, os retângulos dos elementos em pixels CSS e a faixa.
+`layout.py` converte isso para a tela pela proporção entre a página e a janela, o que
+já cobre DPI e zoom. Se a proporção não bate (o miniplayer, por exemplo), valem as bordas
+padrão. Segurança: a ponte só é aceita com o token aleatório de
+`data/spotify_bridge.json`, gravado na extensão ao instalar. A origem
+`https://xpui.app.spotify.com` só é liberada nesse endpoint, e cada relatório tem até
+64 KB e 48 elementos. `spotify/watcher.py` lê a faixa a cada 2 s e entrega o momento
+`musica` à vida própria.
+
+Verificação em 26/11/2026: `tests/test_spotify.py` (19 testes: título da janela, bordas
+no Spotify maximizado e flutuante, janela na frente, conversão das posições da ponte
+com DPI de 120 %, pouso numa capa e carona na rolagem, a mascote no player bar e as
+preferências, token e relatórios ruins, a faixa contada só depois de 20 s e uma vez,
+ordem das fontes, instalador com um Spicetify falso, falas do banco, endpoints HTTP e
+WebSocket com origem e token). Não testado aqui: Windows, Spotify e Spicetify reais.
+Os seletores da página do Spotify (`.Root__*`, `.main-card-card`, `[role="tab"]`) podem
+mudar com atualizações dele. Nesse caso, as bordas padrão continuam valendo.

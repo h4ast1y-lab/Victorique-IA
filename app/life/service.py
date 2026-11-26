@@ -247,6 +247,7 @@ class LifeService:
             "organizado": {"n": 12, "descricao": "arquivos agrupados por tipo"},
             "retorno": {"ausencia": 95 * 60},
             "tedio": {},
+            "musica": {"musica": "Clair de Lune", "artista": "Claude Debussy", "album": "Suite bergamasque"},
         }
         candidate = {"category": category, "facts": samples[category]}
         prefs = self.prefs()

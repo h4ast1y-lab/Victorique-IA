@@ -2328,6 +2328,44 @@ async function openSettingsModal(section = null) {
   loadBackups();
   checkHealth();
   loadLifeStatus();
+  loadSpotifyStatus();
+}
+
+// ----------------- Spotify (app/spotify) -----------------
+async function loadSpotifyStatus() {
+  const card = $('spotifyStatus');
+  if (!card) return;
+  try {
+    const s = await api('/api/spotify/status');
+    const parts = [];
+    parts.push(s.connected
+      ? `Ponte do Spicetify conectada (${s.elements} lugares para ela pisar).`
+      : 'Sem a ponte: ela usa o formato padrão do Spotify (barra do player e painéis).');
+    if (s.track) {
+      parts.push(`${s.track.playing ? 'Tocando' : 'Pausada'}: ${s.track.title}${s.track.artist ? ' · ' + s.track.artist : ''}.`);
+    }
+    if (!s.spicetify) parts.push('Spicetify não encontrado neste computador.');
+    card.textContent = parts.join(' ');
+  } catch (err) {
+    card.textContent = 'Não consegui consultar o Spotify.';
+  }
+}
+
+async function installSpicetify() {
+  if (!confirm('Instalar a ponte da Victorique no Spotify pelo Spicetify? O Spotify vai reiniciar.')) return;
+  const button = $('btnSpicetify');
+  button.disabled = true;
+  button.textContent = 'Instalando…';
+  try {
+    const result = await api('/api/spotify/spicetify/install', { method: 'POST' });
+    toast(result.message || 'Ponte instalada.');
+    setTimeout(loadSpotifyStatus, 8000);
+  } catch (err) {
+    toast(`Não consegui instalar: ${err.message}`, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Instalar a ponte do Spicetify';
+  }
 }
 
 // ----------------- Backup -----------------
@@ -2581,7 +2619,7 @@ const LIFE_FAST_TICK_MS = 4000;
 const LIFE_SILENCE_MINUTES = 120;
 const LIFE_TAGS = {
   tedio: 'entediada', tarde: 'hora tardia', bagunca: 'sobre uma pasta',
-  organizado: 'organização concluída', retorno: 'de volta',
+  organizado: 'organização concluída', retorno: 'de volta', musica: 'no Spotify',
 };
 const life = { timer: null, busy: false, lastTyping: 0, event: null, hideTimer: null, status: null };
 
@@ -2811,6 +2849,7 @@ function initLife() {
   $('btnLifeSilence').addEventListener('click', silenceLife);
   $('btnLifeAccept').addEventListener('click', acceptLifeCase);
   $('btnLifeTest').addEventListener('click', testLife);
+  $('btnSpicetify').addEventListener('click', installSpicetify);
   $('btnLifeDnd').addEventListener('click', () => {
     const on = !prefs.life_dnd;
     savePref('life_dnd', on, { immediate: true });
